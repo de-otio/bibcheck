@@ -1,0 +1,5 @@
+[[patterns]]
+key = "test-deprecated-term"
+regex = "the deprecated term"
+flags = "i"
+description = "Use 'preferred term' instead."

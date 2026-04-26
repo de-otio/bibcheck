@@ -1,0 +1,16 @@
+node_modules/
+dist/
+coverage/
+*.log
+*.tsbuildinfo
+*.tgz
+tmp/
+
+.DS_Store
+.env
+.env.local
+.env.*.local
+
+.bibcheck-cache/
+# doc-search index
+.doc-search-index

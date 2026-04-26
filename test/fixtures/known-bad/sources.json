@@ -1,0 +1,28 @@
+[
+  {
+    "id": "habermas1962strukturwandel",
+    "type": "book",
+    "title": "Strukturwandel der Öffentlichkeit",
+    "author": [{ "family": "Habermas", "given": "Jürgen" }],
+    "issued": { "date-parts": [[1962]] },
+    "publisher": "Suhrkamp",
+    "URL": "https://example.invalid/dead"
+  },
+  {
+    "id": "nodoi1950nofixture",
+    "type": "book",
+    "title": "A Pre-DOI Work Without Any URL",
+    "author": [{ "family": "NoUrl", "given": "Author" }],
+    "issued": { "date-parts": [[1950]] },
+    "publisher": "Obscure Press"
+  },
+  {
+    "id": "fakeDoi2099test",
+    "type": "article-journal",
+    "title": "A Work With a Fake DOI",
+    "author": [{ "family": "Fake", "given": "Author" }],
+    "issued": { "date-parts": [[2099]] },
+    "container-title": "Journal of Nonexistent Studies",
+    "DOI": "10.99999/nonexistent-test-doi"
+  }
+]

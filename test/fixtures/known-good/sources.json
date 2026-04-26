@@ -1,0 +1,30 @@
+[
+  {
+    "id": "habermas1962strukturwandel",
+    "type": "book",
+    "title": "Strukturwandel der Öffentlichkeit",
+    "author": [{ "family": "Habermas", "given": "Jürgen" }],
+    "issued": { "date-parts": [[1962]] },
+    "publisher": "Suhrkamp",
+    "DOI": "10.2307/466240"
+  },
+  {
+    "id": "mill1859onliberty",
+    "type": "book",
+    "title": "On Liberty",
+    "author": [{ "family": "Mill", "given": "John Stuart" }],
+    "issued": { "date-parts": [[1859]] },
+    "ISBN": "978-0-14-043207-9"
+  },
+  {
+    "id": "fraser1990rethinking",
+    "type": "article-journal",
+    "title": "Rethinking the Public Sphere",
+    "author": [{ "family": "Fraser", "given": "Nancy" }],
+    "container-title": "Social Text",
+    "volume": "25",
+    "page": "56-80",
+    "issued": { "date-parts": [[1990]] },
+    "DOI": "10.2307/466240"
+  }
+]

@@ -1,0 +1,45 @@
+name: Release
+on:
+  push:
+    tags: ['v*']
+
+# Minimum-permission principle.
+# id-token: write enables OIDC (npm Trusted Publishing).
+# contents: read lets us check out the tagged commit.
+# packages: write is intentionally NOT set — that's the GitHub Packages
+# permission, unrelated to npm. (Gotcha #5.)
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      # Node 24 (NOT 22) — npm Trusted Publishing requires npm >= 11.5.1,
+      # which ships with Node 24+. Node 22 ships npm 10 and fails publish
+      # with a misleading 404 PUT after provenance signing. (Gotcha #1.)
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          # registry-url is REQUIRED here; without it npm publish fails
+          # with ENEEDAUTH. (Gotcha #4.)
+          registry-url: https://registry.npmjs.org
+
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build
+      - run: npx vitest run --coverage
+
+      # Note: do NOT set NODE_AUTH_TOKEN here, even to empty. If the env
+      # variable is present, npm uses it instead of OIDC and Trusted
+      # Publishing silently never engages. (Gotcha #3.)
+      #
+      # --provenance requires the source repo to be PUBLIC. If the repo
+      # is private, drop the --provenance flag (OIDC auth still works).
+      # (Gotcha #2.)
+      - name: Publish to npm (OIDC — no NODE_AUTH_TOKEN)
+        run: npm publish --provenance --access public

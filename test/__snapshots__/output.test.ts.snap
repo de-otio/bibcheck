@@ -1,0 +1,84 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`renderMarkdown > snapshot test: empty output structure is stable 1`] = `
+"# bibcheck report
+
+## Summary
+
+**Schema version:** 0.1.0
+**Tool:** bibcheck@0.0.0
+
+| Metric | Count |
+|--------|-------|
+| Total entries | 0 |
+| Verified | 0 |
+| Metadata mismatches | 0 |
+| Unverifiable | 0 |
+| Canonical issues | 0 |
+| Linkage failures | 0 |
+| Phrase flags | 0 |
+| Worklist items | 0 |
+
+## Bibliography entries
+
+No findings.
+
+## Linkage
+
+No findings.
+
+## Phrase flags
+
+No findings.
+
+## Worklist
+
+No findings.
+"
+`;
+
+exports[`renderMarkdown > snapshot test: populated output structure is stable 1`] = `
+"# bibcheck report
+
+## Summary
+
+**Schema version:** 0.1.0
+**Tool:** bibcheck@0.0.0
+
+| Metric | Count |
+|--------|-------|
+| Total entries | 3 |
+| Verified | 1 |
+| Metadata mismatches | 1 |
+| Unverifiable | 1 |
+| Canonical issues | 2 |
+| Linkage failures | 1 |
+| Phrase flags | 1 |
+| Worklist items | 1 |
+
+## Bibliography entries
+
+| Citekey | Existence status | Canonical status | Canonical URL |
+|---------|-----------------|-----------------|---------------|
+| habermas1962strukturwandel | metadata-mismatch | dead-url | [link](https://example.org/habermas) |
+| kant1781kritik | unverifiable | wrong-host | [link](https://bad-host.example.com/kant) |
+| mill1859onliberty | verified | verified-canonical | [link](https://archive.org/details/onliberty00millgoog) |
+
+## Linkage
+
+- **@missing-key** — referenced in:
+  - [docs/chapter2.md:42](docs/chapter2.md#L42)
+  - [docs/intro.md:5](docs/intro.md#L5)
+
+## Phrase flags
+
+- \`deprecated-term\` in [docs/chapter1.md:15](docs/chapter1.md#L15): "deprecated phrase"
+  - Reference: <https://example.org/style-guide>
+
+## Worklist
+
+- [direct-quotation] [docs/chapter1.md:42](docs/chapter1.md#L42) — Verify verbatim against named edition.
+  - Citation: \`@mill1859onliberty\`
+  - Verification: <https://archive.org/details/onliberty00millgoog>
+"
+`;

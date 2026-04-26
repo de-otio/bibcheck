@@ -1,0 +1,9 @@
+[bibliography]
+file = "sources.json"
+
+[docs]
+include = ["docs/**/*.md"]
+
+[phrases]
+file = "phrases.toml"
+
