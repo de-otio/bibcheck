@@ -1,0 +1,25 @@
+version: 2
+updates:
+  # npm dependencies — weekly, grouped to cut PR noise. Security updates are
+  # opened automatically regardless of this schedule.
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+    groups:
+      production-dependencies:
+        dependency-type: production
+      development-dependencies:
+        dependency-type: development
+
+  # Keep the GitHub Actions in our workflows current (would have surfaced the
+  # actions/checkout & setup-node Node-20 deprecation automatically).
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    groups:
+      github-actions:
+        patterns:
+          - "*"
