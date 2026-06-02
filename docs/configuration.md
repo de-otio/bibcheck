@@ -114,6 +114,7 @@ Per-source-type weighting rules. Keys are source-type strings matching the `type
 |-----------|------|---------|-------------|
 | `warn_load_bearing` | boolean | *(unset)* | Emit a worklist item when an entry of this type is cited in a load-bearing context. |
 | `allow_load_bearing` | boolean | *(unset)* | Suppress the load-bearing worklist item for this type. |
+| `gate_not_found` | boolean | `true` | When `false`, a `not-found-in-databases` result for an entry of this type does **not** fail `bibcheck check`. For pre-DOI / archival source types where absence from CrossRef/OpenAlex/OpenLibrary is expected (no DOI was ever issued). The finding is still reported (informational), never dropped. Governs only the not-found gate — malformed identifiers always gate. |
 
 ```toml
 [source_types]
@@ -123,7 +124,41 @@ warn_load_bearing = true
 
 [source_types."article-journal"]
 allow_load_bearing = true
+
+# Pre-DOI primary sources: absence from the databases is not a fabrication
+# signal, so don't fail the build on it.
+[source_types.manuscript]
+gate_not_found = false
+
+[source_types."classic-text"]
+gate_not_found = false
 ```
+
+### Per-entry suppression: `bibcheck-allow` in a CSL `note`
+
+Source-type rules are broad. To suppress a single finding for one entry, add a
+`bibcheck-allow` directive to that entry's CSL-JSON `note` field (mirroring the
+`<!-- bibcheck-allow: <key> -->` mechanism used for phrases):
+
+```json
+{
+  "id": "anon1680pamphlet",
+  "type": "article-journal",
+  "title": "A True Relation …",
+  "note": "bibcheck-allow: not-found (reason: 1680 pamphlet, Bodleian shelfmark Vet. A3 e.123)"
+}
+```
+
+- **Finding type** is one of `not-found`, `malformed-identifier`,
+  `canonical-issue`, `metadata-mismatch`. The directive suppresses only *that*
+  finding for *that* entry.
+- **A reason is mandatory.** An allow without a non-empty `(reason: …)` is
+  reported as a warning and does **not** suppress — the finding still gates.
+- A suppressed finding is reported as an **acknowledged** (informational) item,
+  not dropped: it stays in the summary totals and entries, and is logged via
+  `check.acknowledged_finding`. It just does not drive the non-zero exit code.
+- An explicit allow takes precedence over a source-type exemption, which in
+  turn takes precedence over the secure default.
 
 ---
 

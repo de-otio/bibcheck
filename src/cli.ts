@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url';
 
 import { loadConfig, ConfigError } from './config.js';
 import type { Config } from './config.js';
-import { buildCheckDeps, runCheck, checkExitReasons } from './check.js';
+import { buildCheckDeps, runCheck, checkExitReasons, buildSuppressionContext } from './check.js';
 import type { Logger } from './check.js';
 import { createMemoryCache } from './cache/fs-cache.js';
 import { createHttpClient } from './http.js';
@@ -174,7 +174,12 @@ async function runCheckCommand(
   const rendered = renderOutput(output, format);
   await writeOutput(rendered, opts.output);
 
-  const reasons = checkExitReasons(output);
+  // T23: pass the suppression context (source-type exemptions + per-entry
+  // bibcheck-allow notes) so a legitimately-unverifiable source can be
+  // suppressed without disabling the gate. Suppressed findings stay in the
+  // rendered output; they just don't drive the exit code.
+  const suppression = buildSuppressionContext(config, deps.bibliography);
+  const reasons = checkExitReasons(output, suppression);
   if (reasons.length > 0) {
     process.exit(1);
   }

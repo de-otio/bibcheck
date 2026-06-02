@@ -44,6 +44,16 @@ const PhrasesSchema = z.object({
 const SourceTypeEntrySchema = z.object({
   warn_load_bearing: z.boolean().optional(),
   allow_load_bearing: z.boolean().optional(),
+  /**
+   * T23 — source-type gating rule. When `false`, a `not-found-in-databases`
+   * (unverifiable-absence) result for an entry of this CSL type does NOT gate
+   * `bibcheck check` — e.g. a pre-DOI manuscript / archival source for which no
+   * DOI was ever expected. The finding is still reported (informational), never
+   * dropped. Omitted / `true` ⇒ the Q1 secure default (gate). Governs only the
+   * not-found gate; malformed identifiers, canonical issues, and metadata
+   * mismatches always gate (use a per-entry `bibcheck-allow` note for those).
+   */
+  gate_not_found: z.boolean().optional(),
 });
 
 const ApisSchema = z.object({

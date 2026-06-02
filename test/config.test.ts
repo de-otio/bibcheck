@@ -304,4 +304,40 @@ describe('ConfigSchema', () => {
     });
     expect(config.edition_discipline['kant']).toBe('akademie-ausgabe');
   });
+
+  // --- T23 source-type gating rule ---
+
+  it('source_types accepts gate_not_found = false (T23 exemption)', () => {
+    const config = ConfigSchema.parse({
+      source_types: {
+        manuscript: { gate_not_found: false },
+        'article-journal': { gate_not_found: true },
+      },
+    });
+    expect(config.source_types['manuscript']).toEqual({ gate_not_found: false });
+    expect(config.source_types['article-journal']).toEqual({ gate_not_found: true });
+  });
+
+  it('source_types gate_not_found is optional (absent ⇒ secure default)', () => {
+    const config = ConfigSchema.parse({
+      source_types: { book: { warn_load_bearing: true } },
+    });
+    expect(config.source_types['book']?.gate_not_found).toBeUndefined();
+  });
+
+  it('source_types coexists with the worklist warn_load_bearing key', () => {
+    const config = ConfigSchema.parse({
+      source_types: { manuscript: { gate_not_found: false, warn_load_bearing: false } },
+    });
+    expect(config.source_types['manuscript']).toEqual({
+      gate_not_found: false,
+      warn_load_bearing: false,
+    });
+  });
+
+  it('rejects a non-boolean gate_not_found', () => {
+    expect(() =>
+      ConfigSchema.parse({ source_types: { manuscript: { gate_not_found: 'yes' } } }),
+    ).toThrow();
+  });
 });

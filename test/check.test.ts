@@ -9,6 +9,7 @@ import { describe, it, expect, vi } from 'vitest';
 import {
   runCheck,
   checkExitReasons,
+  buildSuppressionContext,
   CHECK_NON_ZERO_REASON,
   type RunCheckDeps,
   type Logger,
@@ -16,7 +17,7 @@ import {
 import { OutputSchema, SCHEMA_VERSION } from '../src/schema/output.js';
 import type { Config } from '../src/config.js';
 import type { CslEntry } from '../src/schema/csl.js';
-import type { ExistenceLayer, CanonicalLayer, PhraseFlag, LinkageEntry, WorklistItem } from '../src/schema/output.js';
+import type { Output, ExistenceLayer, CanonicalLayer, PhraseFlag, LinkageEntry, WorklistItem } from '../src/schema/output.js';
 import type { RunExistenceResult } from '../src/existence.js';
 import type { RunCanonicalResult } from '../src/canonical.js';
 import type { RunLinkageResult } from '../src/linkage.js';
@@ -1239,5 +1240,263 @@ describe('CHECK_NON_ZERO_REASON', () => {
     expect(CHECK_NON_ZERO_REASON.metadata_mismatch).toBe('metadata_mismatch');
     expect(CHECK_NON_ZERO_REASON.not_found_in_databases).toBe('not_found_in_databases');
     expect(CHECK_NON_ZERO_REASON.malformed_identifier).toBe('malformed_identifier');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T23 — Suppression & source-type gating
+//
+// Drives checkExitReasons WITH a SuppressionContext (built by
+// buildSuppressionContext) and exercises the acknowledgement logging in
+// runCheck. Each gate decision is tested on BOTH sides.
+// ---------------------------------------------------------------------------
+
+describe('T23 – suppression & source-type gating', () => {
+  function notFoundOutput(entry: CslEntry): Output {
+    return {
+      schemaVersion: SCHEMA_VERSION,
+      tool: { name: 'bibcheck', version: '0.0.0' },
+      summary: {
+        totalEntries: 1,
+        verified: 0,
+        metadataMismatches: 0,
+        notFoundInDatabases: 1,
+        malformedIdentifiers: 0,
+        unverifiable: 0,
+        canonicalIssues: 0,
+        linkageFailures: 0,
+        phraseFlags: 0,
+        worklistItems: 0,
+      },
+      entries: [
+        {
+          citekey: entry.citekey,
+          identifiers: null,
+          existence: notFoundExistence(),
+          canonical: null,
+        },
+      ],
+      linkage: [],
+      phraseFlags: [],
+      worklist: [],
+    };
+  }
+
+  it('default-gates a not-found for an unlisted type (no context = unconditional)', () => {
+    const entry = makeEntry('fake2099', { type: 'article-journal' });
+    const output = notFoundOutput(entry);
+    // No context: pre-T23 unconditional gate.
+    expect(checkExitReasons(output)).toContain(CHECK_NON_ZERO_REASON.not_found_in_databases);
+    // With a default context: still gates.
+    const ctx = buildSuppressionContext(defaultConfig, [entry]);
+    expect(checkExitReasons(output, ctx)).toContain(CHECK_NON_ZERO_REASON.not_found_in_databases);
+  });
+
+  it('source-type exemption: manuscript with gate_not_found=false does NOT gate but stays in totals', () => {
+    const entry = makeEntry('manu1', { type: 'manuscript' });
+    const output = notFoundOutput(entry);
+    const config: Config = {
+      ...defaultConfig,
+      source_types: { manuscript: { gate_not_found: false } },
+    };
+    const ctx = buildSuppressionContext(config, [entry]);
+    expect(checkExitReasons(output, ctx)).not.toContain(
+      CHECK_NON_ZERO_REASON.not_found_in_databases,
+    );
+    // Still counted — reported, not dropped.
+    expect(output.summary.notFoundInDatabases).toBe(1);
+    expect(output.entries[0]?.existence?.status).toBe('not-found-in-databases');
+  });
+
+  it('per-entry allow-with-reason suppresses the finding (does not gate)', () => {
+    const entry = makeEntry('manu2', {
+      type: 'article-journal',
+      note: 'bibcheck-allow: not-found (reason: 1680 pamphlet, Bodleian shelfmark X)',
+    });
+    const output = notFoundOutput(entry);
+    const ctx = buildSuppressionContext(defaultConfig, [entry]);
+    expect(checkExitReasons(output, ctx)).not.toContain(
+      CHECK_NON_ZERO_REASON.not_found_in_databases,
+    );
+  });
+
+  it('per-entry allow with a MISSING reason still gates (reason mandatory)', () => {
+    const entry = makeEntry('manu3', {
+      type: 'article-journal',
+      note: 'bibcheck-allow: not-found',
+    });
+    const output = notFoundOutput(entry);
+    const ctx = buildSuppressionContext(defaultConfig, [entry]);
+    expect(checkExitReasons(output, ctx)).toContain(
+      CHECK_NON_ZERO_REASON.not_found_in_databases,
+    );
+  });
+
+  it('with two entries, only the unsuppressed one gates', () => {
+    const exempt = makeEntry('manu4', { type: 'manuscript' });
+    const gated = makeEntry('fake4', { type: 'article-journal' });
+    const output: Output = {
+      ...notFoundOutput(exempt),
+      summary: {
+        ...notFoundOutput(exempt).summary,
+        totalEntries: 2,
+        notFoundInDatabases: 2,
+      },
+      entries: [
+        { citekey: 'manu4', identifiers: null, existence: notFoundExistence(), canonical: null },
+        { citekey: 'fake4', identifiers: null, existence: notFoundExistence(), canonical: null },
+      ],
+    };
+    const config: Config = {
+      ...defaultConfig,
+      source_types: { manuscript: { gate_not_found: false } },
+    };
+    const ctx = buildSuppressionContext(config, [exempt, gated]);
+    // One entry remains gated → still fails.
+    expect(checkExitReasons(output, ctx)).toContain(
+      CHECK_NON_ZERO_REASON.not_found_in_databases,
+    );
+  });
+
+  it('malformed-identifier source-type does NOT exempt; an allow does', () => {
+    const entry = makeEntry('badid', { type: 'manuscript', doi: 'not-a-doi' });
+    const output: Output = {
+      schemaVersion: SCHEMA_VERSION,
+      tool: { name: 'bibcheck', version: '0.0.0' },
+      summary: {
+        totalEntries: 1, verified: 0, metadataMismatches: 0, notFoundInDatabases: 0,
+        malformedIdentifiers: 1, unverifiable: 1, canonicalIssues: 0,
+        linkageFailures: 0, phraseFlags: 0, worklistItems: 0,
+      },
+      entries: [
+        {
+          citekey: 'badid',
+          identifiers: { doi: 'malformed', isbn: 'not-applicable', url: 'not-applicable' },
+          existence: unverifiableExistence(),
+          canonical: null,
+        },
+      ],
+      linkage: [], phraseFlags: [], worklist: [],
+    };
+    // Source-type exemption does NOT cover malformed identifiers → still gates.
+    const exemptCfg: Config = {
+      ...defaultConfig,
+      source_types: { manuscript: { gate_not_found: false } },
+    };
+    expect(
+      checkExitReasons(output, buildSuppressionContext(exemptCfg, [entry])),
+    ).toContain(CHECK_NON_ZERO_REASON.malformed_identifier);
+
+    // A per-entry allow does suppress it.
+    const allowed = makeEntry('badid', {
+      type: 'manuscript',
+      doi: 'not-a-doi',
+      note: 'bibcheck-allow: malformed-identifier (reason: legacy hand-entered DOI)',
+    });
+    expect(
+      checkExitReasons(output, buildSuppressionContext(defaultConfig, [allowed])),
+    ).not.toContain(CHECK_NON_ZERO_REASON.malformed_identifier);
+  });
+
+  it('runCheck logs acknowledged (suppressed) findings as informational and warns on reason-less allows', async () => {
+    const logger = makeMockLogger();
+    const exempt = makeEntry('manu5', { type: 'manuscript' });
+    const reasonless = makeEntry('manu6', {
+      type: 'article-journal',
+      note: 'bibcheck-allow: not-found',
+    });
+    const config: Config = {
+      ...defaultConfig,
+      source_types: { manuscript: { gate_not_found: false } },
+    };
+    const deps = makeBaseDeps({
+      config,
+      logger,
+      bibliography: [exempt, reasonless],
+      _runExistence: vi.fn().mockResolvedValue({
+        entries: [
+          { citekey: 'manu5', existence: notFoundExistence() },
+          { citekey: 'manu6', existence: notFoundExistence() },
+        ],
+      } satisfies RunExistenceResult),
+    });
+
+    const output = await runCheck(deps);
+    // Suppressed source-type finding logged as informational acknowledgement.
+    const infoMock = logger.info as ReturnType<typeof vi.fn>;
+    const ackCalls = infoMock.mock.calls.filter((c) => c[0] === 'check.acknowledged_finding');
+    expect(ackCalls).toHaveLength(1);
+    expect(ackCalls[0]?.[1]).toMatchObject({ citekey: 'manu5', suppressedBy: 'source-type' });
+
+    // Reason-less allow warned about.
+    const warnMock = logger.warn as ReturnType<typeof vi.fn>;
+    const warnCalls = warnMock.mock.calls.filter(
+      (c) => c[0] === 'suppression.allow_missing_reason',
+    );
+    expect(warnCalls).toHaveLength(1);
+    expect(warnCalls[0]?.[1]).toMatchObject({ citekey: 'manu6' });
+
+    // Totals keep both not-found entries (never dropped).
+    expect(output.summary.notFoundInDatabases).toBe(2);
+    expect(() => OutputSchema.parse(output)).not.toThrow();
+  });
+
+  it('runCheck warns on an unknown finding-type token in a bibcheck-allow note', async () => {
+    const logger = makeMockLogger();
+    const entry = makeEntry('typo1', {
+      type: 'article-journal',
+      note: 'bibcheck-allow: nonexistent-finding (reason: oops)',
+    });
+    const deps = makeBaseDeps({
+      logger,
+      bibliography: [entry],
+      _runExistence: vi.fn().mockResolvedValue({
+        entries: [{ citekey: 'typo1', existence: verifiedExistence() }],
+      } satisfies RunExistenceResult),
+    });
+    await runCheck(deps);
+    const warnMock = logger.warn as ReturnType<typeof vi.fn>;
+    const calls = warnMock.mock.calls.filter((c) => c[0] === 'suppression.allow_unknown_type');
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.[1]).toMatchObject({ citekey: 'typo1', token: 'nonexistent-finding' });
+  });
+
+  it('runCheck logs an acknowledged malformed-identifier when allowed-with-reason', async () => {
+    const logger = makeMockLogger();
+    // Real runIdentifiers detects the malformed DOI; the allow suppresses it.
+    const entry = makeEntry('legacy1', {
+      type: 'article-journal',
+      doi: 'not-a-doi',
+      note: 'bibcheck-allow: malformed-identifier (reason: legacy hand-entered DOI)',
+    });
+    const http: HttpClient = {
+      get: vi.fn(async () => ({ status: 200, headers: {}, body: { status: 'ok', message: {} } })),
+      head: vi.fn(async (url: string) => ({ status: 200, finalUrl: url, redirectChain: [] })),
+    };
+    const deps = makeBaseDeps({
+      logger,
+      http,
+      bibliography: [entry],
+      _runExistence: undefined, // real runner; malformed DOI short-circuits network
+      skip: new Set(['canonical', 'linkage', 'phrases', 'worklist']),
+    });
+
+    const output = await runCheck(deps);
+    expect(output.entries[0]?.identifiers?.doi).toBe('malformed');
+    // Still counted in the summary (never dropped).
+    expect(output.summary.malformedIdentifiers).toBe(1);
+    // But it does not gate, and the acknowledgement is logged.
+    const ctx = buildSuppressionContext(deps.config, deps.bibliography);
+    expect(checkExitReasons(output, ctx)).not.toContain(
+      CHECK_NON_ZERO_REASON.malformed_identifier,
+    );
+    const infoMock = logger.info as ReturnType<typeof vi.fn>;
+    const ackCalls = infoMock.mock.calls.filter((c) => c[0] === 'check.acknowledged_finding');
+    expect(ackCalls).toHaveLength(1);
+    expect(ackCalls[0]?.[1]).toMatchObject({
+      citekey: 'legacy1',
+      findingType: 'malformed-identifier',
+      suppressedBy: 'allow',
+    });
   });
 });

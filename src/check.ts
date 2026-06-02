@@ -16,6 +16,13 @@ import { readFile as nodeReadFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
+import {
+  isGated,
+  parseAllowsForBibliography,
+  type ParsedAllow,
+  type FindingType,
+} from './suppression.js';
+
 import type { Config } from './config.js';
 import type { CslEntry } from './schema/csl.js';
 import type { CompiledPattern } from './phrases/load.js';
@@ -543,6 +550,45 @@ export async function runCheck(deps: RunCheckDeps): Promise<Output> {
     worklist: worklistResult.worklist,
   };
 
+  // --- T23 suppression: warn on reason-less allows + log acknowledged findings ---
+  // Reason is MANDATORY: a `bibcheck-allow` with an empty/missing reason does
+  // NOT suppress (isGated ignores it); warn so the omission is visible rather
+  // than silently ineffective. An unknown finding-type token likewise warns.
+  // Suppressed findings stay in the document (totals unchanged) and are logged
+  // as informational acknowledgements — never silently dropped.
+  {
+    const ctx = buildSuppressionContext(config, bibliography);
+    const { unknownTypes, reasonless } = parseAllowDiagnostics(bibliography);
+    for (const u of reasonless) {
+      logger.warn('suppression.allow_missing_reason', {
+        citekey: u.citekey,
+        findingType: u.findingType,
+        message:
+          `bibcheck-allow for '${u.findingType}' on @${u.citekey} has no (reason: ...); ` +
+          'reason is mandatory, so this allow does NOT suppress. Add a reason to silence the finding.',
+      });
+    }
+    for (const u of unknownTypes) {
+      logger.warn('suppression.allow_unknown_type', {
+        citekey: u.citekey,
+        token: u.token,
+        message:
+          `bibcheck-allow on @${u.citekey} names unknown finding-type '${u.token}'; ` +
+          'this directive suppresses nothing.',
+      });
+    }
+    for (const ack of collectAcknowledgedFindings(output, ctx)) {
+      logger.info('check.acknowledged_finding', {
+        citekey: ack.citekey,
+        findingType: ack.findingType,
+        suppressedBy: ack.reason,
+        message:
+          `@${ack.citekey}: '${ack.findingType}' suppressed by ${ack.reason} ` +
+          '(reported as acknowledged, excluded from the build gate).',
+      });
+    }
+  }
+
   // --- Validate ---
   const parsed = OutputSchema.safeParse(output);
   if (!parsed.success) {
@@ -566,8 +612,9 @@ export const CHECK_NON_ZERO_REASON = {
   unresolved_linkage: 'unresolved_linkage',
   canonical_issue: 'canonical_issue',
   metadata_mismatch: 'metadata_mismatch',
-  // NEW in 0.2.0 (T22): secure-default gating (Q1). Both fire unconditionally
-  // until T23 layers source-type exemptions and per-finding suppression on top.
+  // NEW in 0.2.0 (T22): secure-default gating (Q1). Gate by default; T23 layers
+  // source-type exemptions and per-finding suppression on top via the optional
+  // SuppressionContext passed to checkExitReasons (see below).
   not_found_in_databases: 'not_found_in_databases',
   malformed_identifier: 'malformed_identifier',
 } as const;
@@ -584,6 +631,39 @@ const CANONICAL_EXIT_STATUSES = new Set([
 ]);
 
 /**
+ * T23 suppression context, passed through from `runCheck` to
+ * `checkExitReasons`. Carries the per-entry CSL `type` (not present on the
+ * frozen Output schema, but needed to resolve source-type exemptions) plus the
+ * parsed per-entry `bibcheck-allow` directives and the config. Pure data.
+ */
+export interface SuppressionContext {
+  config: Config;
+  /** citekey → CSL `type` (undefined when the entry has no type). */
+  cslTypeByCitekey: ReadonlyMap<string, string | undefined>;
+  allows: readonly ParsedAllow[];
+}
+
+/** A finding that gated by default would have, but was suppressed (T23). */
+export interface AcknowledgedFinding {
+  citekey: string;
+  findingType: FindingType;
+  /** Why it was suppressed: a source-type rule or a per-entry allow. */
+  reason: 'source-type' | 'allow';
+}
+
+/** True when an entry has any malformed/bad-checksum identifier (gating signal). */
+function entryHasMalformedIdentifier(e: Entry): boolean {
+  const ids = e.identifiers;
+  return (
+    ids !== null &&
+    (ids.doi === 'malformed' ||
+      ids.isbn === 'malformed' ||
+      ids.isbn === 'bad-checksum' ||
+      ids.url === 'malformed')
+  );
+}
+
+/**
  * Returns the list of finding kinds that should cause a non-zero exit.
  * Empty array → exit 0.
  *
@@ -592,25 +672,27 @@ const CANONICAL_EXIT_STATUSES = new Set([
  *   - 'unresolved_linkage' if any linkage[].status === 'unresolved'
  *   - 'canonical_issue' if any entry's canonical.status is in the problem set
  *   - 'metadata_mismatch' if any entry's existence.status === 'metadata-mismatch'
- *   - 'not_found_in_databases' if any entry's existence.status ===
- *     'not-found-in-databases' (B1 fix — absence is a fabrication signal and
- *     gates by default per Q1)
- *   - 'malformed_identifier' if summary.malformedIdentifiers > 0 (a malformed
- *     DOI/ISBN/URL is a cheap fabrication signal and gates by default)
+ *   - 'not_found_in_databases' if any (non-suppressed) entry's existence.status
+ *     === 'not-found-in-databases' (B1 fix — absence is a fabrication signal
+ *     and gates by default per Q1)
+ *   - 'malformed_identifier' if any (non-suppressed) entry has a malformed
+ *     DOI/ISBN/URL (a cheap fabrication signal; gates by default)
  *
  * Does NOT trigger non-zero exit:
  *   - acknowledged phrases
  *   - worklist items
  *   - unverifiable existence (graceful degradation)
  *
- * T23 SEAM: the not-found / malformed gates are unconditional here. T23 layers
- * source-type exemptions (e.g. pre-DOI primary sources) and a per-finding
- * allow-with-reason suppression mechanism on top of these two reasons — it
- * will filter which entries reach the `some(...)` predicates below (e.g. via a
- * suppression set / source-type policy passed into this function), NOT remove
- * the gate itself. Until T23 lands, every not-found / malformed finding gates.
+ * T23: the optional `ctx` filters WHICH entries reach the gate. A not-found or
+ * malformed finding does NOT gate when `isGated` resolves it to a source-type
+ * exemption or a valid per-entry allow — the gate itself is unchanged, only the
+ * per-entry predicate is narrowed. Suppressed findings remain in the Output
+ * document (entries + summary counts) and are NOT removed; they are surfaced as
+ * informational acknowledgements (see `collectAcknowledgedFindings`). When
+ * `ctx` is omitted, every not-found / malformed finding gates unconditionally
+ * (the pre-T23 secure default).
  */
-export function checkExitReasons(output: Output): string[] {
+export function checkExitReasons(output: Output, ctx?: SuppressionContext): string[] {
   const reasons: string[] = [];
 
   if (output.phraseFlags.some((f) => f.status === 'flagged')) {
@@ -633,18 +715,122 @@ export function checkExitReasons(output: Output): string[] {
     reasons.push(CHECK_NON_ZERO_REASON.metadata_mismatch);
   }
 
-  // --- T23 SEAM (Q1 secure default): not-found + malformed gate by default ---
-  if (
-    output.entries.some(
-      (e) => e.existence !== null && e.existence.status === 'not-found-in-databases',
-    )
-  ) {
+  // --- Q1 secure default + T23 suppression: not-found + malformed ---
+  // Without a context, both gate unconditionally. With one, each finding is
+  // routed through `isGated`; only findings that resolve to `gated: true` count.
+  const gatedNotFound = output.entries.some((e) => {
+    if (e.existence === null || e.existence.status !== 'not-found-in-databases') return false;
+    if (ctx === undefined) return true;
+    return isGated({
+      citekey: e.citekey,
+      findingType: 'not-found',
+      cslType: ctx.cslTypeByCitekey.get(e.citekey),
+      config: ctx.config,
+      allows: ctx.allows as ParsedAllow[],
+    }).gated;
+  });
+  if (gatedNotFound) {
     reasons.push(CHECK_NON_ZERO_REASON.not_found_in_databases);
   }
 
-  if (output.summary.malformedIdentifiers > 0) {
+  const gatedMalformed = output.entries.some((e) => {
+    if (!entryHasMalformedIdentifier(e)) return false;
+    if (ctx === undefined) return true;
+    return isGated({
+      citekey: e.citekey,
+      findingType: 'malformed-identifier',
+      cslType: ctx.cslTypeByCitekey.get(e.citekey),
+      config: ctx.config,
+      allows: ctx.allows as ParsedAllow[],
+    }).gated;
+  });
+  if (gatedMalformed) {
     reasons.push(CHECK_NON_ZERO_REASON.malformed_identifier);
   }
 
   return reasons;
+}
+
+/**
+ * Collect the not-found / malformed findings that WOULD have gated but were
+ * suppressed by a source-type exemption or a per-entry allow. These stay in the
+ * Output document (totals are unchanged); this list drives the informational
+ * `check.acknowledged_finding` log entries, mirroring how an acknowledged
+ * phrase is reported rather than dropped. Pure.
+ */
+export function collectAcknowledgedFindings(
+  output: Output,
+  ctx: SuppressionContext,
+): AcknowledgedFinding[] {
+  const acks: AcknowledgedFinding[] = [];
+  for (const e of output.entries) {
+    const cslType = ctx.cslTypeByCitekey.get(e.citekey);
+    if (e.existence !== null && e.existence.status === 'not-found-in-databases') {
+      const r = isGated({
+        citekey: e.citekey,
+        findingType: 'not-found',
+        cslType,
+        config: ctx.config,
+        allows: ctx.allows as ParsedAllow[],
+      });
+      if (!r.gated && r.reason !== 'default') {
+        acks.push({ citekey: e.citekey, findingType: 'not-found', reason: r.reason });
+      }
+    }
+    if (entryHasMalformedIdentifier(e)) {
+      const r = isGated({
+        citekey: e.citekey,
+        findingType: 'malformed-identifier',
+        cslType,
+        config: ctx.config,
+        allows: ctx.allows as ParsedAllow[],
+      });
+      if (!r.gated && r.reason !== 'default') {
+        acks.push({ citekey: e.citekey, findingType: 'malformed-identifier', reason: r.reason });
+      }
+    }
+  }
+  return acks;
+}
+
+/**
+ * Build the T23 suppression context from the config and the loaded
+ * bibliography: the citekey → CSL-type map (the frozen Output schema does not
+ * carry `type`, but it is needed to resolve source-type exemptions) and the
+ * parsed per-entry `bibcheck-allow` directives. Pure. The CLI calls this and
+ * passes the result to `checkExitReasons`.
+ */
+export function buildSuppressionContext(
+  config: Config,
+  bibliography: CslEntry[],
+): SuppressionContext {
+  const cslTypeByCitekey = new Map<string, string | undefined>();
+  for (const e of bibliography) {
+    cslTypeByCitekey.set(e.citekey, e.type);
+  }
+  const { allows } = parseAllowsForBibliography(
+    bibliography.map((e) => ({ citekey: e.citekey, note: e.note })),
+  );
+  return { config, cslTypeByCitekey, allows };
+}
+
+/**
+ * Diagnostics over the parsed allows: directives with an unknown finding-type
+ * token and valid-type directives whose reason was omitted (reason is
+ * mandatory; these do not suppress). Pure; drives the `runCheck` warnings.
+ */
+function parseAllowDiagnostics(bibliography: CslEntry[]): {
+  unknownTypes: { citekey: string; token: string }[];
+  reasonless: { citekey: string; findingType: FindingType }[];
+} {
+  const { allows, unknownTypes } = parseAllowsForBibliography(
+    bibliography.map((e) => ({ citekey: e.citekey, note: e.note })),
+  );
+  const reasonless = allows
+    .filter((a) => a.reason === null)
+    .map((a) => ({ citekey: a.citekey, findingType: a.findingType }));
+  return {
+    unknownTypes: unknownTypes.map((u) => ({ citekey: u.citekey, token: u.token })),
+    reasonless,
+  };
 }
