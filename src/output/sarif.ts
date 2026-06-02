@@ -28,9 +28,6 @@ import type { Output } from '../schema/output.js';
 // Constants
 // ---------------------------------------------------------------------------
 
-// Package version: hard-coded for v0.1 since process.cwd() may not be the
-// package root at runtime. TODO: derive from package.json at build time.
-const PACKAGE_VERSION = '0.0.0';
 const INFORMATION_URI = 'https://github.com/de-otio/bibcheck';
 const DOCS_BASE = 'https://github.com/de-otio/bibcheck/blob/main/docs/output-schema.md';
 
@@ -339,15 +336,16 @@ export function renderSarif(output: Output): string {
   const allRuleDefs = [...STATIC_RULES, ...phraseRules];
 
   // Build the run.
+  const version = output.tool.version;
   const sarifRunBuilder = new SarifRunBuilder().initSimple({
     toolDriverName: 'bibcheck',
-    toolDriverVersion: PACKAGE_VERSION,
+    toolDriverVersion: version,
     url: INFORMATION_URI,
   });
 
   // Add semanticVersion directly (node-sarif-builder doesn't expose a setter).
   (sarifRunBuilder.run.tool.driver as unknown as Record<string, unknown>)['semanticVersion'] =
-    PACKAGE_VERSION;
+    version;
 
   // Register all rules.
   for (const ruleDef of allRuleDefs) {

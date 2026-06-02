@@ -10,6 +10,24 @@ for pre-DOI primary sources point to trusted canonical editions.
 > configuration grammar are stable within the v0.x major; minor bumps are
 > additive.
 
+## Installation
+
+Requires Node.js >= 20.
+
+```sh
+# one-off, no install
+npx @de-otio/bibcheck check
+
+# or install globally
+npm install -g @de-otio/bibcheck
+bibcheck check
+```
+
+bibcheck looks for a `bibcheck.toml` in the working directory (it also runs with
+sensible defaults and none at all). See [docs/usage.md](docs/usage.md) for a
+quick start and [docs/configuration.md](docs/configuration.md) for the config
+reference.
+
 ## Why bibcheck
 
 AI-assisted research workflows regularly produce citations that look real but
@@ -56,14 +74,18 @@ sound."
   Philosophy archives, PhilPapers, national-library catalogues) and that the
   URL is live.
 - **Pandoc-citeproc-style linkage check.** Every `@citekey` reference in your
-  markdown documents resolves to an entry in the bibliography. Deterministic
-  CI-safe alternative to `pandoc --citeproc`'s render-time warning.
+  markdown documents resolves to an entry in the bibliography (handling the
+  full citation grammar — `[@a; @b, p. 5]`, author-suppression `-@key`,
+  locators). Deterministic CI-safe alternative to `pandoc --citeproc`'s
+  render-time warning. Also flags **orphaned entries** — bibliography entries
+  never cited in any document — as an informational (non-gating) signal that an
+  LLM may have padded the reference list.
 - **Structured human-triage worklist.** Emits manual-verification items —
   direct quotations, page-cited paraphrases, citations to contested-coverage
   source types, non-canonical editions — with pre-filled verification URLs and
   explicit `notCheckedFor: ["claim-support"]` annotations.
 - **Versioned structured output.** JSON / Markdown / SARIF, schema versioned at
-  `0.2.0`. Designed for LLM agents, CI pipelines, and editor extensions.
+  `0.3.0`. Designed for LLM agents, CI pipelines, and editor extensions.
 
 bibcheck also exposes an **opt-in phrase denylist** (`bibcheck phrases`): a
 regex pass over prose against patterns the project supplies via
@@ -92,7 +114,7 @@ against affected entries); it does not silently degrade to "unverifiable."
 
 ## Status
 
-v0.1. All seven subcommands are implemented. The output schema is at `0.2.0`.
+v0.1. All seven subcommands are implemented. The output schema is at `0.3.0`.
 See [docs/usage.md](docs/usage.md) for usage and
 [docs/output-schema.md](docs/output-schema.md) for the JSON contract.
 
@@ -103,7 +125,7 @@ See [docs/usage.md](docs/usage.md) for usage and
 - [docs/configuration.md](docs/configuration.md) — full `bibcheck.toml`
   reference including gating rules and per-entry suppression.
 - [docs/output-schema.md](docs/output-schema.md) — JSON output schema contract
-  for downstream consumers (schema `0.2.0`).
+  for downstream consumers (schema `0.3.0`).
 - [docs/extending.md](docs/extending.md) — adding database clients, output
   formats, and subcommands.
 - [SECURITY.md](SECURITY.md) — security policy, data handling, and

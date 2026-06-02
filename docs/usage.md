@@ -15,16 +15,18 @@ confirm connectivity before a large check.
 
 ## Installation
 
-Install globally for repeated use:
+Requires Node.js >= 20. Install globally for repeated use (the package is
+scoped `@de-otio/bibcheck`; it provides a `bibcheck` binary):
 
 ```sh
-npm install -g bibcheck
+npm install -g @de-otio/bibcheck
+bibcheck <subcommand>
 ```
 
 For one-off use without a global install:
 
 ```sh
-npx --yes bibcheck <subcommand>
+npx --yes @de-otio/bibcheck <subcommand>
 ```
 
 ## Quick start
@@ -209,7 +211,7 @@ bibcheck check --format sarif --output bibcheck.sarif
 
 ```yaml
 - name: Run bibcheck
-  run: npx bibcheck check --format sarif --output bibcheck.sarif
+  run: npx @de-otio/bibcheck check --format sarif --output bibcheck.sarif
 
 - name: Upload SARIF to GitHub Code Scanning
   uses: github/codeql-action/upload-sarif@v3
@@ -258,7 +260,7 @@ without disabling the gate entirely.
 
 ```yaml
 - name: Install bibcheck
-  run: npm install -g bibcheck
+  run: npm install -g @de-otio/bibcheck
 
 - name: Run citation checks
   run: bibcheck check --format text

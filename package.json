@@ -1,6 +1,6 @@
 {
   "name": "@de-otio/bibcheck",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Humanities-aware citation verification for CSL-JSON bibliographies. Canonical-edition URL verification, Pandoc-citeproc-style linkage check, structured human-triage worklist generation, and an opt-in project-supplied phrase denylist.",
   "keywords": [
     "citations",
@@ -15,7 +15,18 @@
   ],
   "license": "MIT",
   "author": "Richard Myers <richard.myers@de-otio.org>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/de-otio/bibcheck.git"
+  },
+  "bugs": {
+    "url": "https://github.com/de-otio/bibcheck/issues"
+  },
+  "homepage": "https://github.com/de-otio/bibcheck#readme",
   "type": "module",
+  "publishConfig": {
+    "access": "public"
+  },
   "main": "./dist/index.js",
   "exports": {
     ".": {
@@ -40,6 +51,7 @@
   ],
   "scripts": {
     "build": "tsc && chmod +x dist/cli.js",
+    "prepublishOnly": "npm run typecheck && npm run build",
     "pretest": "npm run build",
     "test": "vitest run",
     "test:watch": "vitest",

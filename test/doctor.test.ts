@@ -23,6 +23,7 @@ import { ConfigSchema } from '../src/config.js';
 import type { Config } from '../src/config.js';
 import { createHttpClient, type HttpClient, type HttpHeadResponse } from '../src/http.js';
 import { buildUserAgent } from '../src/cli.js';
+import { VERSION } from '../src/version.js';
 
 // ---------------------------------------------------------------------------
 // Fixtures / helpers
@@ -853,7 +854,7 @@ describe('runDoctor — polite-pool User-Agent on connectivity client', () => {
       expect(getCheck(result.checks, 'crossref-connectivity')?.status).toBe('ok');
       expect(seenUserAgents.length).toBeGreaterThan(0);
       for (const ua of seenUserAgents) {
-        expect(ua).toBe('bibcheck/0.0.0 (mailto:oa@example.com)');
+        expect(ua).toBe(`bibcheck/${VERSION} (mailto:oa@example.com)`);
       }
     } finally {
       await new Promise<void>((r) => server.close(() => r()));

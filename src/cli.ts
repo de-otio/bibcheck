@@ -24,6 +24,7 @@ import { renderMarkdown } from './output/markdown.js';
 import { renderSarif } from './output/sarif.js';
 import { renderText } from './output/text.js';
 import type { Output } from './schema/output.js';
+import { VERSION, USER_AGENT_BASE } from './version.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -72,8 +73,8 @@ interface DoctorOpts extends GlobalOpts {
 export function buildUserAgent(config: Config): string {
   const mailto = config.apis.crossref_mailto ?? config.apis.openalex_mailto ?? null;
   return mailto != null && mailto !== ''
-    ? `bibcheck/0.0.0 (mailto:${mailto})`
-    : 'bibcheck/0.0.0';
+    ? `${USER_AGENT_BASE} (mailto:${mailto})`
+    : USER_AGENT_BASE;
 }
 
 function buildLogger(): Logger {
@@ -339,7 +340,7 @@ export function buildProgram(): Command {
   program
     .name('bibcheck')
     .description('Humanities-aware citation verification for CSL-JSON bibliographies.')
-    .version('0.0.0', '-V, --version', 'print version and exit');
+    .version(VERSION, '-V, --version', 'print version and exit');
 
   // ---- check ----
   const checkCmd = new Command('check')

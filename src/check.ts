@@ -41,6 +41,7 @@ import { loadBibliography, BibliographyParseError } from './schema/csl.js';
 import { loadDenylist, PhraseLoaderError } from './phrases/load.js';
 import { createFsCache } from './cache/fs-cache.js';
 import { createHttpClient, isPrivateApiBase } from './http.js';
+import { USER_AGENT_BASE } from './version.js';
 import {
   createCrossRefClient,
   createOpenAlexClient,
@@ -169,7 +170,7 @@ export async function buildCheckDeps(opts: BuildCheckDepsOptions): Promise<RunCh
     isPrivateApiBase(config.apis.openalex_base) ||
     isPrivateApiBase(config.apis.openlibrary_base);
   const http = createHttpClient({
-    userAgent: userAgent ?? 'bibcheck/0.0.0',
+    userAgent: userAgent ?? USER_AGENT_BASE,
     defaultTimeoutMs: 10_000,
     maxRetries: 2,
     perOriginConcurrency: 2,
