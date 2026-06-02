@@ -1,24 +1,49 @@
 # Output schema
 
-bibcheck's JSON output is a versioned contract for downstream consumers: LLM agents, CI tooling, and editor extensions.
+bibcheck's JSON output is a versioned contract for downstream consumers: LLM
+agents, CI tooling, and editor extensions.
 
-The authoritative schema definition is in [`src/schema/output.ts`](../src/schema/output.ts), which uses Zod. This document is hand-maintained for v0.1; keeping it in sync with `src/schema/output.ts` is a manual step. A generator script (`scripts/generate-schema-doc.ts`) is planned for a future release to automate this.
+The authoritative schema definition is in
+[`src/schema/output.ts`](../src/schema/output.ts), which uses Zod. This
+document is hand-maintained and reflects the `0.2.0` schema exactly.
 
 ## Schema version pinning
 
-bibcheck's output schema is versioned via `schemaVersion` (currently `0.1.0`). The runtime emits the current `SCHEMA_VERSION` constant from `src/schema/output.ts`.
+bibcheck's output schema is versioned via `schemaVersion` (currently `0.2.0`).
+The runtime emits the current `SCHEMA_VERSION` constant from
+`src/schema/output.ts`.
 
-Validation accepts any `0.x.y` document. Consumers should pin to a major (currently `0.x`). Minor bumps are additive and backward-compatible. Major bumps (1.0.0+) are breaking.
+Validation accepts any `0.x.y` document. Consumers should pin to a major
+(currently `0.x`). Minor bumps are additive and backward-compatible. Major
+bumps (1.0.0+) are breaking.
 
 Concretely:
-- A consumer that validates `schemaVersion` against `/^0\.\d+\.\d+$/` will accept any v0.x output.
-- A consumer that requires exact equality to `"0.1.0"` will need updating on minor bumps.
+- A consumer that validates `schemaVersion` against `/^0\.\d+\.\d+$/` will
+  accept any v0.x output.
+- A consumer that requires exact equality to `"0.2.0"` will need updating on
+  minor bumps.
+
+## Verification boundary
+
+**Reading `"verified"` does not mean the source supports the prose's claim.**
+A `verified` status means the work exists in CrossRef/OpenAlex/OpenLibrary and
+its recorded metadata (title, first author) agrees with the bibliography entry.
+That is a necessary check, not a sufficient one.
+
+bibcheck never checks whether a cited source supports the prose's assertion.
+That is a human judgment. The `notCheckedFor: ["claim-support"]` field on
+every existence layer makes this explicit and machine-readable: an LLM-agent
+consumer that reads the JSON cannot mistake `verified` for "claim is sound."
+
+There are no numeric confidence scores in this schema. The `evidence`
+vocabulary (`exists-metadata-match`, `exists-metadata-mismatch`, `absent`,
+`unverifiable`) is the calibrated alternative: discrete, defined states.
 
 ## Top-level shape
 
 ```json
 {
-  "schemaVersion": "0.1.0",
+  "schemaVersion": "0.2.0",
   "tool": {
     "name": "bibcheck",
     "version": "0.1.0"
@@ -37,7 +62,8 @@ Concretely:
 
 Type: `string` (matches `/^0\.\d+\.\d+$/` for v0.x documents)
 
-The schema version, independent of the package version. Consumers should use this to decide how to parse the rest of the document.
+The schema version, independent of the package version. Consumers should use
+this to decide how to parse the rest of the document.
 
 ### `tool`
 
@@ -52,18 +78,22 @@ Type: object
 
 Type: object
 
-Aggregate counts across all entries and checks.
+Aggregate counts across all entries and checks. The four existence buckets
+(`verified`, `metadataMismatches`, `notFoundInDatabases`, `unverifiable`) are
+mutually exclusive and must sum to `totalEntries` (enforced by the schema).
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `totalEntries` | integer >= 0 | Number of entries in the bibliography. |
 | `verified` | integer >= 0 | Entries with `existence.status = "verified"`. |
 | `metadataMismatches` | integer >= 0 | Entries with `existence.status = "metadata-mismatch"`. |
+| `notFoundInDatabases` | integer >= 0 | Entries absent from all applicable databases. A fabrication signal; gates by default. **NEW in 0.2.0.** |
+| `malformedIdentifiers` | integer >= 0 | Entries with at least one malformed/bad-checksum identifier in the `identifiers` layer. A cheap fabrication signal; gates by default. **NEW in 0.2.0.** |
 | `unverifiable` | integer >= 0 | Entries with `existence.status = "unverifiable"`. |
 | `canonicalIssues` | integer >= 0 | Entries with a canonical status other than `"verified-canonical"` or `"not-applicable"`. |
-| `linkageFailures` | integer >= 0 | Count of unresolved citekey references (must equal `linkage.filter(l => l.status === "unresolved").length`). |
-| `phraseFlags` | integer >= 0 | Count of phrase flags with `status = "flagged"` (acknowledged matches are excluded). |
-| `worklistItems` | integer >= 0 | Count of worklist items (must equal `worklist.length`). |
+| `linkageFailures` | integer >= 0 | Count of unresolved citekey references. Must equal `linkage.filter(l => l.status === "unresolved").length`. |
+| `phraseFlags` | integer >= 0 | Count of phrase flags with `status = "flagged"` (acknowledged matches excluded). |
+| `worklistItems` | integer >= 0 | Count of worklist items. Must equal `worklist.length`. |
 
 ### `entries`
 
@@ -76,15 +106,32 @@ One entry per bibliography record. Indexed by `citekey`.
 | Field | Type | Description |
 |-------|------|-------------|
 | `citekey` | string (non-empty) | The CSL-JSON `id` field used to cite this entry. |
+| `identifiers` | `IdentifiersLayer` or null | Local identifier well-formedness findings (pre-network). Null when not run. **NEW in 0.2.0.** |
 | `existence` | `ExistenceLayer` or null | Existence check findings. Null when the existence subcommand was not run. |
 | `canonical` | `CanonicalLayer` or null | Canonical-edition URL findings. Null when the canonical subcommand was not run. |
+
+#### `IdentifiersLayer`
+
+Layer 0: local, pre-network well-formedness validation. Runs before any
+network call; a malformed or bad-checksum identifier short-circuits the
+existence lookup and gates by default. **NEW in 0.2.0.**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `doi` | `IdentifierStatus` | `"malformed"` if the DOI fails the `^10.\d{4,}/\S+$` pattern. |
+| `isbn` | `IdentifierStatus` | `"bad-checksum"` for a failed ISBN-10/13 check digit; `"malformed"` for bad shape. |
+| `url` | `IdentifierStatus` | `"malformed"` if the URL is not a well-formed http/https URL. |
 
 #### `ExistenceLayer`
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `status` | `ExistenceStatus` | Aggregate existence status (see enum table below). |
-| `checks` | array of `ExistenceCheck` | Per-source check results. |
+| `evidence` | `ExistenceEvidence` | Defined evidence vocabulary (see enum table below). Distinct from the bare `status` rollup; prevents LLM-agent consumers from reading `verified` as "claim is sound." **NEW in 0.2.0.** |
+| `checkedFor` | `CheckDimension[]` | Dimensions that were checked, e.g. `["existence","metadata"]`. **NEW in 0.2.0.** |
+| `notCheckedFor` | `CheckDimension[]` | Dimensions that were NOT checked. Always includes `"claim-support"` (bibcheck never verifies whether the source supports the prose's claim; that is the manual worklist's job). **NEW in 0.2.0.** |
+| `checks` | `ExistenceCheck[]` | Per-source check results. |
+| `error` | string or null | Set when the layer crashed (all sources were transport errors), so consumers can distinguish "we ran and found nothing applicable" from "we failed to run." Null when the layer ran cleanly. **NEW in 0.2.0.** |
 
 ##### `ExistenceCheck`
 
@@ -122,6 +169,8 @@ One entry per citekey encountered in the scanned markdown files.
 |-------|------|-------------|
 | `file` | string (non-empty) | Relative path to the markdown file. |
 | `line` | integer > 0 | Line number where the `@citekey` reference appears. |
+| `locator` | string or null (optional) | Citation locator, e.g. `"p. 42"`, `"pp. 33–35"`. **NEW in 0.2.0.** |
+| `authorSuppressed` | boolean (optional) | True when the citation suppressed the author, e.g. `-@key`. **NEW in 0.2.0.** |
 
 ### `phraseFlags`
 
@@ -145,6 +194,9 @@ One entry per phrase-denylist match found in the scanned markdown files.
 Type: array of `WorklistItem` objects
 
 Items requiring manual verification, generated by the `worklist` subcommand.
+Each item carries `notCheckedFor: ["claim-support"]` on its associated
+existence layer, stating explicitly that whether the source supports the prose's
+claim is not automated.
 
 #### `WorklistItem`
 
@@ -157,19 +209,55 @@ Items requiring manual verification, generated by the `worklist` subcommand.
 | `snippet` | string (non-empty) | Excerpt of prose around the citation, for context. |
 | `verificationUrl` | string (http/https URL) or null | Pre-filled URL the human can use to perform the manual check. |
 | `recommendedAction` | string (non-empty) | Human-readable description of what the manual check should establish. |
+| `locator` | string or null (optional) | Citation locator, e.g. `"p. 42"`, `"pp. 33–35"`. **NEW in 0.2.0.** |
 
 ---
 
 ## Enum tables
+
+### `IdentifierStatus`
+
+| Value | Description |
+|-------|-------------|
+| `"ok"` | Identifier is present and well-formed. |
+| `"malformed"` | Identifier is present but fails structural validation (DOI pattern, URL scheme). |
+| `"bad-checksum"` | ISBN is structurally valid but check-digit verification fails. |
+| `"not-applicable"` | No identifier of this type is present on the entry. |
 
 ### `ExistenceStatus`
 
 | Value | Description |
 |-------|-------------|
 | `"verified"` | At least one database confirmed the entry exists and metadata matches. |
-| `"metadata-mismatch"` | A database found the DOI/ISBN but metadata (title, authors, year) does not match. |
-| `"not-found-in-databases"` | No database returned a positive match. |
-| `"unverifiable"` | The entry has no DOI or ISBN and no title search returned a confident match. |
+| `"metadata-mismatch"` | A database found the DOI/ISBN but title/author metadata does not agree. |
+| `"not-found-in-databases"` | No database returned a positive match; absence is a fabrication signal and gates by default. |
+| `"unverifiable"` | The entry has no DOI or ISBN and no title search returned a confident match. Does not gate. |
+
+### `ExistenceEvidence`
+
+Defined evidence vocabulary distinct from the bare `status` rollup. Prevents
+an LLM-agent consumer from reading `"verified"` as "the citation's claim is
+sound." There is no numeric confidence score. **NEW in 0.2.0.**
+
+| Value | Description |
+|-------|-------------|
+| `"exists-metadata-match"` | Found in a database and metadata (title, first author) agrees. |
+| `"exists-metadata-mismatch"` | Found in a database, but metadata does not agree. |
+| `"absent"` | Confirmed not found in all applicable databases. A fabrication signal. |
+| `"unverifiable"` | No applicable identifier, or all sources returned transport errors. |
+
+### `CheckDimension`
+
+The verification dimensions bibcheck can report on. Used by `checkedFor` and
+`notCheckedFor` to state explicitly what was and was not checked. **NEW in
+0.2.0.**
+
+| Value | Description |
+|-------|-------------|
+| `"existence"` | Whether the work exists in a database. |
+| `"metadata"` | Whether the database's title and first-author agree with the bibliography entry. |
+| `"canonical-url"` | Whether the entry's URL points to a trusted canonical-edition host. |
+| `"claim-support"` | Whether the source supports the prose's assertion. Always in `notCheckedFor`; this is the manual worklist's job. |
 
 ### `ExistenceCheckSource`
 
@@ -178,13 +266,12 @@ Items requiring manual verification, generated by the `worklist` subcommand.
 | `"crossref"` | CrossRef DOI registry. |
 | `"openalex"` | OpenAlex bibliographic metadata. |
 | `"openlibrary"` | Open Library ISBN catalogue. |
-| `"worldcat"` | WorldCat Classify ISBN classification (keyless legacy endpoint in v0.1). |
 
 ### `ExistenceCheckResult`
 
 | Value | Description |
 |-------|-------------|
-| `"no-doi"` | The entry has no DOI; this source was not queried. |
+| `"no-doi"` | The entry has no DOI or ISBN and no applicable identifier; this source was not queried. |
 | `"found"` | Record found and metadata matches. |
 | `"not-found"` | Record not found in this source's index. |
 | `"metadata-mismatch"` | Record found but metadata does not match the bibliography entry. |
@@ -230,13 +317,35 @@ Items requiring manual verification, generated by the `worklist` subcommand.
 
 From the module-level JSDoc in `src/schema/output.ts`:
 
-- **Additive changes** (new optional fields, new enum members on otherwise-open types) bump the **minor** part and remain backward-compatible. Consumers pinning to `/^0\.\d+\.\d+$/` continue to validate.
-- **Renames, removals, or changed semantics** bump the **major** part. Consumers pinning a major version are insulated from such changes.
+- **Additive changes** (new optional fields, new enum members on otherwise-open
+  types) bump the **minor** part and remain backward-compatible. Consumers
+  pinning to `/^0\.\d+\.\d+$/` continue to validate.
+- **Renames, removals, or changed semantics** bump the **major** part.
+  Consumers pinning a major version are insulated from such changes.
 
-The `schemaVersion` field is independent of the package version. A patch release of the bibcheck package may carry no schema change; a minor schema change may be shipped in a patch package release if it is purely additive.
+The `schemaVersion` field is independent of the package version. A patch
+release of the bibcheck package may carry no schema change; a minor schema
+change may be shipped in a patch package release if it is purely additive.
 
 ---
 
-## v0.1 limitation
+## What changed in 0.2.0
 
-For v0.1, this file is hand-maintained. The intended workflow (generating this document from the Zod schemas via `scripts/generate-schema-doc.ts`) is planned for a future release. Until then, keep this document in sync with `src/schema/output.ts` when making schema changes.
+- **`identifiers` layer** added to each `Entry`: local, pre-network
+  well-formedness validation of DOI (pattern), ISBN (check digit), and URL
+  (scheme). Runs before any network call; a malformed identifier short-circuits
+  the existence lookup.
+- **`existence` layer expanded**: added `evidence` (discrete evidence
+  vocabulary), `checkedFor`, `notCheckedFor`, and `error` fields. The
+  `notCheckedFor: ["claim-support"]` annotation is machine-readable proof that
+  existence verification does not imply claim support.
+- **`summary` counters added**: `notFoundInDatabases` and `malformedIdentifiers`
+  (both gate by default). The four existence buckets (`verified`,
+  `metadataMismatches`, `notFoundInDatabases`, `unverifiable`) are now required
+  to sum to `totalEntries`.
+- **`ExistenceCheckSource` reduced**: the keyless OCLC Classify endpoint
+  (previously used for ISBN classification) was decommissioned in 2019 and has
+  been removed. ISBN existence is covered by OpenLibrary. The valid sources are
+  now `"crossref"`, `"openalex"`, and `"openlibrary"` only.
+- **`LinkageReference` and `WorklistItem`** gained optional `locator` and
+  `authorSuppressed` fields to capture Pandoc-style citation syntax.

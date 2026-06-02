@@ -21,8 +21,20 @@ bibcheck queries the following public APIs as part of its operation:
 - CrossRef (api.crossref.org) — DOI metadata
 - OpenAlex (api.openalex.org) — bibliographic metadata
 - OpenLibrary (openlibrary.org) — ISBN metadata
-- WorldCat Classify (classify.oclc.org) — keyless ISBN classification (HTTP only)
 
-bibcheck performs HEAD requests against URLs in your bibliography for canonical-edition verification, validating each redirect hop against a trusted-host whitelist and rejecting redirects to private IP ranges (SSRF mitigation).
+bibcheck performs HEAD requests against URLs in your bibliography for
+canonical-edition verification. The implemented SSRF mitigation covers
+**cross-host redirect hops**: when a redirect moves to a different hostname,
+bibcheck resolves that hostname's IP addresses and rejects the redirect if any
+address is in a private range (loopback, RFC 1918, link-local). The initial
+URL and same-host redirects are not IP-checked. The final destination is
+validated against the trusted-host whitelist configured in `[trusted_hosts]`.
 
-User-supplied phrase-denylist regex patterns are compiled with [re2js](https://www.npmjs.com/package/re2js) for linear-time guarantees (ReDoS mitigation).
+Note: per-hop private-IP rejection for all hops (including the initial URL and
+same-host redirects) is not yet implemented. The current control is best-effort
+for the cross-host redirect case. Only http/https scheme URLs are accepted at
+any hop.
+
+User-supplied phrase-denylist regex patterns are compiled with
+[re2js](https://www.npmjs.com/package/re2js) for linear-time guarantees
+(ReDoS mitigation).
