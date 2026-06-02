@@ -90,6 +90,11 @@ const STATIC_RULES: RuleDef[] = [
     shortDescription: 'A @citekey reference in the prose has no matching bibliography entry.',
     anchor: 'linkage-unresolved',
   },
+  {
+    id: 'bibcheck/linkage/orphan',
+    shortDescription: 'A bibliography entry is never cited in any document (informational; reverse linkage).',
+    anchor: 'linkage-orphan',
+  },
 ];
 
 // ---------------------------------------------------------------------------
@@ -257,6 +262,23 @@ function addLinkageResults(output: Output, sarifRunBuilder: SarifRunBuilder): vo
   }
 }
 
+/**
+ * Orphaned bibliography entries (reverse linkage, H2). Emitted at `note` level
+ * so they surface in Code Scanning as informational annotations and never
+ * cause a CI failure. Bibliography-level, so anchored to sources.json.
+ */
+function addOrphanResults(output: Output, sarifRunBuilder: SarifRunBuilder): void {
+  for (const entry of output.linkage) {
+    if (entry.status !== 'orphan') continue;
+    addResult(sarifRunBuilder, {
+      ruleId: 'bibcheck/linkage/orphan',
+      level: 'note',
+      messageText: `@${entry.citekey} is in the bibliography but is never cited in any document (informational).`,
+      fileUri: 'sources.json',
+    });
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Phrase flag findings
 // ---------------------------------------------------------------------------
@@ -342,6 +364,7 @@ export function renderSarif(output: Output): string {
   addExistenceResults(output, sarifRunBuilder);
   addCanonicalResults(output, sarifRunBuilder);
   addLinkageResults(output, sarifRunBuilder);
+  addOrphanResults(output, sarifRunBuilder);
   addPhraseFlagResults(output, sarifRunBuilder);
 
   // Inject originalUriBaseIds so relative URIs resolve to the project root.

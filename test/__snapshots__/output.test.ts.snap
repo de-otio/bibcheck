@@ -5,7 +5,7 @@ exports[`renderMarkdown > snapshot test: empty output structure is stable 1`] = 
 
 ## Summary
 
-**Schema version:** 0.2.0
+**Schema version:** 0.3.0
 **Tool:** bibcheck@0.0.0
 
 | Metric | Count |
@@ -18,6 +18,7 @@ exports[`renderMarkdown > snapshot test: empty output structure is stable 1`] = 
 | Unverifiable | 0 |
 | Canonical issues | 0 |
 | Linkage failures | 0 |
+| Orphaned entries (informational) | 0 |
 | Phrase flags | 0 |
 | Worklist items | 0 |
 
@@ -26,6 +27,10 @@ exports[`renderMarkdown > snapshot test: empty output structure is stable 1`] = 
 No findings.
 
 ## Linkage
+
+No findings.
+
+## Orphaned entries (informational)
 
 No findings.
 
@@ -44,7 +49,7 @@ exports[`renderMarkdown > snapshot test: populated output structure is stable 1`
 
 ## Summary
 
-**Schema version:** 0.2.0
+**Schema version:** 0.3.0
 **Tool:** bibcheck@0.0.0
 
 | Metric | Count |
@@ -57,6 +62,7 @@ exports[`renderMarkdown > snapshot test: populated output structure is stable 1`
 | Unverifiable | 1 |
 | Canonical issues | 2 |
 | Linkage failures | 1 |
+| Orphaned entries (informational) | 0 |
 | Phrase flags | 1 |
 | Worklist items | 1 |
 
@@ -73,6 +79,10 @@ exports[`renderMarkdown > snapshot test: populated output structure is stable 1`
 - **@missing-key** — referenced in:
   - [docs/chapter2.md:42](docs/chapter2.md#L42)
   - [docs/intro.md:5](docs/intro.md#L5)
+
+## Orphaned entries (informational)
+
+No findings.
 
 ## Phrase flags
 

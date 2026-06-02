@@ -5,11 +5,11 @@ agents, CI tooling, and editor extensions.
 
 The authoritative schema definition is in
 [`src/schema/output.ts`](../src/schema/output.ts), which uses Zod. This
-document is hand-maintained and reflects the `0.2.0` schema exactly.
+document is hand-maintained and reflects the `0.3.0` schema exactly.
 
 ## Schema version pinning
 
-bibcheck's output schema is versioned via `schemaVersion` (currently `0.2.0`).
+bibcheck's output schema is versioned via `schemaVersion` (currently `0.3.0`).
 The runtime emits the current `SCHEMA_VERSION` constant from
 `src/schema/output.ts`.
 
@@ -20,7 +20,7 @@ bumps (1.0.0+) are breaking.
 Concretely:
 - A consumer that validates `schemaVersion` against `/^0\.\d+\.\d+$/` will
   accept any v0.x output.
-- A consumer that requires exact equality to `"0.2.0"` will need updating on
+- A consumer that requires exact equality to `"0.3.0"` will need updating on
   minor bumps.
 
 ## Verification boundary
@@ -43,7 +43,7 @@ vocabulary (`exists-metadata-match`, `exists-metadata-mismatch`, `absent`,
 
 ```json
 {
-  "schemaVersion": "0.2.0",
+  "schemaVersion": "0.3.0",
   "tool": {
     "name": "bibcheck",
     "version": "0.1.0"
@@ -91,9 +91,10 @@ mutually exclusive and must sum to `totalEntries` (enforced by the schema).
 | `malformedIdentifiers` | integer >= 0 | Entries with at least one malformed/bad-checksum identifier in the `identifiers` layer. A cheap fabrication signal; gates by default. **NEW in 0.2.0.** |
 | `unverifiable` | integer >= 0 | Entries with `existence.status = "unverifiable"`. |
 | `canonicalIssues` | integer >= 0 | Entries with a canonical status other than `"verified-canonical"` or `"not-applicable"`. |
-| `linkageFailures` | integer >= 0 | Count of unresolved citekey references. Must equal `linkage.filter(l => l.status === "unresolved").length`. |
+| `linkageFailures` | integer >= 0 | Count of unresolved citekey references. Must equal `linkage.filter(l => l.status === "unresolved").length`. Orphans (`status = "orphan"`) are NOT counted here. |
 | `phraseFlags` | integer >= 0 | Count of phrase flags with `status = "flagged"` (acknowledged matches excluded). |
 | `worklistItems` | integer >= 0 | Count of worklist items. Must equal `worklist.length`. |
+| `orphanedEntries` | integer >= 0 (optional) | Count of bibliography entries never cited in any doc (`linkage.filter(l => l.status === "orphan").length`). **Informational — does NOT gate** the build. Optional and additive. **NEW in 0.3.0.** |
 
 ### `entries`
 
@@ -153,15 +154,17 @@ existence lookup and gates by default. **NEW in 0.2.0.**
 
 Type: array of `LinkageEntry` objects
 
-One entry per citekey encountered in the scanned markdown files.
+One entry per citekey encountered in the scanned markdown files, plus one
+`orphan` entry per bibliography citekey that no document references (reverse
+linkage). **NEW in 0.3.0:** orphan entries.
 
 #### `LinkageEntry`
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `citekey` | string (non-empty) | The citekey referenced in prose. |
-| `status` | `LinkageStatus` | Whether the citekey resolves to a bibliography entry. |
-| `references` | array of `LinkageReference` | All locations in markdown where this citekey appears. |
+| `citekey` | string (non-empty) | The citekey (referenced in prose, in the bibliography, or both). |
+| `status` | `LinkageStatus` | `resolved`, `unresolved`, or `orphan` (see enum table). |
+| `references` | array of `LinkageReference` | All locations in markdown where this citekey appears. Empty for `orphan` entries (they are never cited). |
 
 ##### `LinkageReference`
 
@@ -292,8 +295,9 @@ The verification dimensions bibcheck can report on. Used by `checkedFor` and
 
 | Value | Description |
 |-------|-------------|
-| `"resolved"` | The citekey appears in the bibliography. |
-| `"unresolved"` | The citekey does not appear in the bibliography. |
+| `"resolved"` | The citekey appears in prose AND in the bibliography. |
+| `"unresolved"` | The citekey appears in prose but NOT in the bibliography. Gates the build. |
+| `"orphan"` | The citekey appears in the bibliography but is never referenced in any doc (reverse linkage). Informational; does NOT gate. **NEW in 0.3.0.** |
 
 ### `PhraseFlagStatus`
 
@@ -328,6 +332,19 @@ release of the bibcheck package may carry no schema change; a minor schema
 change may be shipped in a patch package release if it is purely additive.
 
 ---
+
+## What changed in 0.3.0
+
+- **`orphan` linkage status** added to `LinkageStatus`. A bibliography citekey
+  that is never referenced in any document is emitted as a `LinkageEntry` with
+  `status = "orphan"` and an empty `references` array (the inverse of
+  `unresolved`). It catches LLM-padded reference lists.
+- **`orphanedEntries` summary counter** added (optional, additive): the count
+  of `orphan` linkage entries.
+- **Orphans are informational and do NOT gate `bibcheck check`.** An uncited
+  bibliography entry is a smell, not proof of fabrication, and gating it would
+  train users to disable the check. The `linkageFailures` invariant continues
+  to count only `unresolved` entries.
 
 ## What changed in 0.2.0
 

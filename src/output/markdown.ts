@@ -45,6 +45,7 @@ function renderSummaryTable(output: Output): string {
     `| Unverifiable | ${summary.unverifiable} |`,
     `| Canonical issues | ${summary.canonicalIssues} |`,
     `| Linkage failures | ${summary.linkageFailures} |`,
+    `| Orphaned entries (informational) | ${summary.orphanedEntries ?? 0} |`,
     `| Phrase flags | ${summary.phraseFlags} |`,
     `| Worklist items | ${summary.worklistItems} |`,
     '',
@@ -87,19 +88,46 @@ function renderLinkageSection(linkage: LinkageEntry[]): string {
 
   if (unresolved.length === 0) {
     lines.push('No findings.');
+  } else {
+    for (const entry of unresolved) {
+      lines.push(`- **@${entry.citekey}** — referenced in:`);
+      const sortedRefs = [...entry.references].sort((a, b) => {
+        const fc = a.file.localeCompare(b.file);
+        return fc !== 0 ? fc : a.line - b.line;
+      });
+      for (const ref of sortedRefs) {
+        lines.push(`  - ${fileLink(ref.file, ref.line)}`);
+      }
+    }
+  }
+  lines.push('');
+  return lines.join('\n');
+}
+
+/**
+ * Orphaned bibliography entries (reverse linkage, H2): bibliography citekeys
+ * never referenced in any doc. Informational — a smell, not a failure — so the
+ * section is always present but plainly labelled non-gating.
+ */
+function renderOrphansSection(linkage: LinkageEntry[]): string {
+  const lines: string[] = ['## Orphaned entries (informational)', ''];
+  const orphans = [...linkage]
+    .filter((l) => l.status === 'orphan')
+    .sort((a, b) => a.citekey.localeCompare(b.citekey));
+
+  if (orphans.length === 0) {
+    lines.push('No findings.');
     lines.push('');
     return lines.join('\n');
   }
 
-  for (const entry of unresolved) {
-    lines.push(`- **@${entry.citekey}** — referenced in:`);
-    const sortedRefs = [...entry.references].sort((a, b) => {
-      const fc = a.file.localeCompare(b.file);
-      return fc !== 0 ? fc : a.line - b.line;
-    });
-    for (const ref of sortedRefs) {
-      lines.push(`  - ${fileLink(ref.file, ref.line)}`);
-    }
+  lines.push(
+    'These bibliography entries are never cited in any document. This is ' +
+      'informational only and does not affect the exit code.',
+  );
+  lines.push('');
+  for (const entry of orphans) {
+    lines.push(`- **@${entry.citekey}**`);
   }
   lines.push('');
   return lines.join('\n');
@@ -181,6 +209,7 @@ export function renderMarkdown(output: Output): string {
     renderSummaryTable(output),
     renderEntriesTable(output.entries),
     renderLinkageSection(output.linkage),
+    renderOrphansSection(output.linkage),
     renderPhraseFlagsSection(output.phraseFlags),
     renderWorklistSection(output.worklist),
   ];

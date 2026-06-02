@@ -4,7 +4,13 @@
  *
  * For each citekey found in prose, emits a LinkageEntry with status
  * 'resolved' or 'unresolved' and the full list of file:line references.
- * Bibliography entries that are never referenced in docs are NOT emitted.
+ *
+ * Reverse linkage (H2): each bibliography citekey that is NEVER referenced in
+ * any doc is also emitted, with status 'orphan' and an empty `references`
+ * array. Orphans are INFORMATIONAL — an uncited bibliography entry is a smell
+ * (e.g. an LLM-padded reference list), not proof of fabrication — so they do
+ * NOT gate `bibcheck check`. They are excluded from `summary.linkageFailures`
+ * (which counts only 'unresolved'); see `summary.orphanedEntries`.
  */
 
 import { discoverDocs } from './markdown/glob.js';
@@ -64,7 +70,7 @@ export async function runLinkage(deps: RunLinkageDeps): Promise<RunLinkageResult
     }
   }
 
-  // Step 4: Build LinkageEntry array
+  // Step 4: Build LinkageEntry array for every citekey referenced in prose.
   const linkage: LinkageEntry[] = [];
 
   for (const [citekey, references] of referenceMap) {
@@ -77,7 +83,15 @@ export async function runLinkage(deps: RunLinkageDeps): Promise<RunLinkageResult
     });
   }
 
-  // Step 5: Sort by citekey for deterministic output
+  // Step 5: Reverse linkage — emit an 'orphan' entry for every bibliography
+  // citekey that no doc referenced. Informational only; never gates.
+  for (const citekey of bibKeys) {
+    if (!referenceMap.has(citekey)) {
+      linkage.push({ citekey, status: 'orphan', references: [] });
+    }
+  }
+
+  // Step 6: Sort by citekey for deterministic output
   linkage.sort((a, b) => a.citekey.localeCompare(b.citekey));
 
   return { linkage };

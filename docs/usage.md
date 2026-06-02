@@ -103,6 +103,12 @@ an entry in the bibliography. Reports unresolved keys with `file:line` anchors.
 Deterministic CI-safe alternative to `pandoc --citeproc`'s render-time
 warning.
 
+It also performs **reverse linkage**: any bibliography entry whose citekey is
+never cited in a document is reported as an `orphan` (with an empty
+`references` list). Orphans catch LLM-padded reference lists, but they are
+**informational only and never gate the build** — an uncited entry is a smell,
+not proof of fabrication.
+
 The citation parser handles Pandoc-style multi-key citations (`[@a; @b, p.5]`)
 and author-suppressed forms (`-@key`), and records any locator (`p. 42`,
 `pp. 33–35`) in the JSON output.
@@ -180,7 +186,7 @@ bibcheck check --format markdown --output report.md
 
 ### `json`
 
-Machine-readable JSON matching the versioned output schema (`0.2.0`). Intended
+Machine-readable JSON matching the versioned output schema (`0.3.0`). Intended
 for LLM agents, CI tooling, and editor extensions. See
 [docs/output-schema.md](output-schema.md) for the full schema contract.
 
@@ -244,6 +250,7 @@ without disabling the gate entirely.
 | `unresolved-linkage` | **Yes** | A `@citekey` in your prose has no matching bibliography entry. |
 | `flagged-phrase` | **Yes** | A denylist pattern matched prose and has no acknowledgement. |
 | `unverifiable` | No | Entry has no DOI/ISBN and title search was inconclusive. Reported but does not gate. |
+| `orphan` (uncited bibliography entry) | No | A bibliography entry is never cited in any doc (reverse linkage). A smell, not proof of fabrication — reported as `summary.orphanedEntries` and a `linkage` entry with `status = "orphan"`, but does NOT gate. |
 | `worklist-item` | No | Manual-check items for direct quotes, page refs, etc. Informational only. |
 | `acknowledged` findings | No | Explicitly suppressed findings (see Suppression below). Stay in output as informational. |
 

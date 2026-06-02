@@ -226,6 +226,31 @@ function makeGatingOutput(): Output {
   });
 }
 
+/**
+ * Output exercising the 0.3.0 reverse-linkage (orphan) renderer branches: an
+ * orphan bibliography entry alongside a resolved and an unresolved one.
+ */
+function makeOrphanOutput(): Output {
+  return OutputSchema.parse({
+    schemaVersion: SCHEMA_VERSION,
+    tool: { name: 'bibcheck', version: '0.0.0' },
+    summary: {
+      ...BASE_SUMMARY,
+      totalEntries: 0,
+      linkageFailures: 1,
+      orphanedEntries: 1,
+    },
+    entries: [],
+    linkage: [
+      { citekey: 'cited2000', status: 'resolved', references: [{ file: 'docs/a.md', line: 4 }] },
+      { citekey: 'missing2001', status: 'unresolved', references: [{ file: 'docs/b.md', line: 9 }] },
+      { citekey: 'uncited1999', status: 'orphan', references: [] },
+    ],
+    phraseFlags: [],
+    worklist: [],
+  });
+}
+
 // ---------------------------------------------------------------------------
 // JSON renderer
 // ---------------------------------------------------------------------------
@@ -847,5 +872,68 @@ describe('renderers — 0.2.0 gating findings', () => {
     const original = makeGatingOutput();
     const parsed = OutputSchema.parse(JSON.parse(renderJson(original)));
     expect(parsed).toEqual(original);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 0.3.0 reverse-linkage (orphan) findings across all renderers. Orphans are
+// informational and must not crash any renderer.
+// ---------------------------------------------------------------------------
+
+describe('renderers — 0.3.0 orphan (reverse linkage) findings', () => {
+  it('json: round-trips an output with an orphan linkage entry', () => {
+    const original = makeOrphanOutput();
+    const parsed = OutputSchema.parse(JSON.parse(renderJson(original)));
+    expect(parsed).toEqual(original);
+    expect(parsed.linkage.find((l) => l.citekey === 'uncited1999')?.status).toBe('orphan');
+  });
+
+  it('text: orphan is an informational note, not an error', () => {
+    const text = renderText(makeOrphanOutput());
+    const line = text.split('\n').find((l) => l.includes('uncited1999'));
+    expect(line).toBeDefined();
+    expect(line).toContain(': note:');
+    expect(line).toContain('orphaned bibliography entry @uncited1999');
+    // The orphan must not inflate the error count.
+    const summaryLine = text.trim().split('\n').pop() ?? '';
+    const errCount = parseInt(summaryLine.split(',')[0] ?? '0', 10);
+    // Only the unresolved linkage is an error.
+    expect(errCount).toBe(1);
+  });
+
+  it('markdown: summary row and an Orphaned entries listing', () => {
+    const md = renderMarkdown(makeOrphanOutput());
+    expect(md).toContain('| Orphaned entries (informational) | 1 |');
+    expect(md).toContain('## Orphaned entries (informational)');
+    const orphanSection = md.split('## Orphaned entries (informational)')[1]?.split('##')[0] ?? '';
+    expect(orphanSection).toContain('@uncited1999');
+    // The resolved/unresolved keys do not appear in the orphan listing.
+    expect(orphanSection).not.toContain('@cited2000');
+  });
+
+  it('markdown: empty output shows "No findings." in the Orphaned entries section', () => {
+    const md = renderMarkdown(makeEmptyOutput());
+    const orphanSection = md.split('## Orphaned entries (informational)')[1]?.split('##')[0] ?? '';
+    expect(orphanSection).toContain('No findings.');
+  });
+
+  it('sarif: orphan is a note-level result under bibcheck/linkage/orphan', () => {
+    const doc = JSON.parse(renderSarif(makeOrphanOutput())) as Record<string, unknown>;
+    const runs = doc['runs'] as Array<Record<string, unknown>>;
+    const results = runs[0]?.['results'] as Array<Record<string, unknown>>;
+    const orphan = results.find((r) => r['ruleId'] === 'bibcheck/linkage/orphan');
+    expect(orphan).toBeDefined();
+    expect(orphan?.['level']).toBe('note');
+    // The rule is registered on the driver.
+    const driver = (runs[0]?.['tool'] as Record<string, unknown>)?.['driver'] as Record<string, unknown>;
+    const ruleIds = (driver?.['rules'] as Array<Record<string, unknown>>).map((r) => r['id']);
+    expect(ruleIds).toContain('bibcheck/linkage/orphan');
+  });
+
+  it('is deterministic across renderers', () => {
+    const o = makeOrphanOutput();
+    expect(renderMarkdown(o)).toBe(renderMarkdown(o));
+    expect(renderText(o)).toBe(renderText(o));
+    expect(renderSarif(o)).toBe(renderSarif(o));
   });
 });

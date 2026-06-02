@@ -131,6 +131,25 @@ function collectLinkageFindings(output: Output): Finding[] {
   return findings;
 }
 
+/**
+ * Orphaned bibliography entries (reverse linkage, H2). Informational only —
+ * `note` level, never gating. Bibliography-level finding, so uses the
+ * sources.json:0 stand-in location.
+ */
+function collectOrphanFindings(output: Output): Finding[] {
+  const findings: Finding[] = [];
+  for (const entry of output.linkage) {
+    if (entry.status !== 'orphan') continue;
+    findings.push({
+      file: 'sources.json',
+      line: 0,
+      level: 'note',
+      message: `orphaned bibliography entry @${entry.citekey} (never cited; informational)`,
+    });
+  }
+  return findings;
+}
+
 function collectPhraseFlagFindings(output: Output): Finding[] {
   const findings: Finding[] = [];
   for (const flag of output.phraseFlags) {
@@ -171,7 +190,7 @@ function collectWorklistFindings(output: Output): Finding[] {
  * Level mapping (same as SARIF):
  * - error: existence metadata-mismatch, canonical dead-url/wrong-host/etc, linkage unresolved
  * - warning: phrase flags (flagged, not acknowledged)
- * - note: existence unverifiable, worklist items
+ * - note: existence unverifiable, worklist items, orphaned bibliography entries
  */
 export function renderText(output: Output): string {
   const allFindings: Finding[] = [
@@ -179,6 +198,7 @@ export function renderText(output: Output): string {
     ...collectExistenceFindings(output),
     ...collectCanonicalFindings(output),
     ...collectLinkageFindings(output),
+    ...collectOrphanFindings(output),
     ...collectPhraseFlagFindings(output),
     ...collectWorklistFindings(output),
   ];

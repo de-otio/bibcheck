@@ -320,6 +320,81 @@ describe('runCheck – unresolved linkage', () => {
 });
 
 // ---------------------------------------------------------------------------
+// 4b. Orphan linkage (H2 reverse linkage) → summary.orphanedEntries > 0, but
+//     does NOT gate (informational).
+// ---------------------------------------------------------------------------
+
+describe('runCheck – orphan linkage (reverse linkage, H2)', () => {
+  it('counts orphans in summary.orphanedEntries and does NOT gate (exits 0)', async () => {
+    const orphan: LinkageEntry = {
+      citekey: 'uncited2000',
+      status: 'orphan',
+      references: [],
+    };
+    const resolved: LinkageEntry = {
+      citekey: 'cited2000',
+      status: 'resolved',
+      references: [{ file: 'docs/paper.md', line: 3 }],
+    };
+    const deps = makeBaseDeps({
+      _runLinkage: vi.fn().mockResolvedValue({
+        linkage: [orphan, resolved],
+      } satisfies RunLinkageResult),
+    });
+
+    const output = await runCheck(deps);
+
+    expect(output.summary.orphanedEntries).toBe(1);
+    // Orphans are NOT linkage failures.
+    expect(output.summary.linkageFailures).toBe(0);
+    expect(output.linkage.find((l) => l.citekey === 'uncited2000')?.status).toBe('orphan');
+    // Crucially: an orphan is the ONLY finding → check still exits 0.
+    expect(checkExitReasons(output)).toEqual([]);
+    expect(() => OutputSchema.parse(output)).not.toThrow();
+  });
+
+  it('a resolved-only linkage reports zero orphans', async () => {
+    const resolved: LinkageEntry = {
+      citekey: 'cited2000',
+      status: 'resolved',
+      references: [{ file: 'docs/paper.md', line: 3 }],
+    };
+    const deps = makeBaseDeps({
+      _runLinkage: vi.fn().mockResolvedValue({
+        linkage: [resolved],
+      } satisfies RunLinkageResult),
+    });
+
+    const output = await runCheck(deps);
+    expect(output.summary.orphanedEntries).toBe(0);
+    expect(checkExitReasons(output)).toEqual([]);
+  });
+
+  it('an orphan alongside an unresolved entry: only unresolved gates', async () => {
+    const orphan: LinkageEntry = { citekey: 'uncited', status: 'orphan', references: [] };
+    const unresolved: LinkageEntry = {
+      citekey: 'missing',
+      status: 'unresolved',
+      references: [{ file: 'docs/a.md', line: 1 }],
+    };
+    const deps = makeBaseDeps({
+      _runLinkage: vi.fn().mockResolvedValue({
+        linkage: [orphan, unresolved],
+      } satisfies RunLinkageResult),
+    });
+
+    const output = await runCheck(deps);
+    expect(output.summary.orphanedEntries).toBe(1);
+    expect(output.summary.linkageFailures).toBe(1);
+    const reasons = checkExitReasons(output);
+    expect(reasons).toContain(CHECK_NON_ZERO_REASON.unresolved_linkage);
+    // The orphan itself contributes no exit reason.
+    expect(reasons).toEqual([CHECK_NON_ZERO_REASON.unresolved_linkage]);
+    expect(() => OutputSchema.parse(output)).not.toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // 5. Flagged phrase → summary.phraseFlags > 0
 // ---------------------------------------------------------------------------
 

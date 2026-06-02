@@ -142,7 +142,7 @@ describe('known-good fixture', () => {
     const result = await runCli(['check', '--format', 'json'], cwd);
     const output = JSON.parse(result.stdout) as Record<string, unknown>;
 
-    expect(output).toHaveProperty('schemaVersion', '0.2.0');
+    expect(output).toHaveProperty('schemaVersion', '0.3.0');
     expect(output).toHaveProperty('tool');
     expect(output).toHaveProperty('summary');
     expect(output).toHaveProperty('entries');

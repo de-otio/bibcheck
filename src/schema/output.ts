@@ -13,6 +13,17 @@
  *   - Renames, removals, or changed semantics bump the major part; consumers
  *     pinning a major version are insulated.
  *
+ * 0.3.0 (H2 — reverse-linkage / orphan detection): added the `'orphan'`
+ * member to `LinkageStatusSchema` (a bibliography citekey never referenced in
+ * any doc — the inverse of `'unresolved'`) and the OPTIONAL `orphanedEntries`
+ * summary counter. Orphans are INFORMATIONAL: they are surfaced but MUST NOT
+ * gate `bibcheck check` (an uncited bibliography entry is a smell, not proof of
+ * fabrication; gating would train users to disable checks). The change is
+ * purely additive — the `linkageFailures` invariant counts only `'unresolved'`
+ * entries, so orphans (status `'orphan'`) are naturally excluded — and the new
+ * summary counter is optional so existing Output builders that do not populate
+ * it keep emitting valid documents.
+ *
  * 0.2.0 (Phase 5 — hallucination-hardening): added the existence evidence
  * vocabulary (`ExistenceEvidenceSchema`) and verification-boundary fields
  * (`evidence` / `checkedFor` / `notCheckedFor` / `error` on the existence
@@ -33,7 +44,7 @@
 import { z } from 'zod';
 
 /** Current bibcheck output schema version. Independent of the package version. */
-export const SCHEMA_VERSION = '0.2.0' as const;
+export const SCHEMA_VERSION = '0.3.0' as const;
 
 /**
  * Accepts any URL whose scheme is http or https. Rejects non-web schemes
@@ -78,6 +89,15 @@ export const SummarySchema = z.object({
   linkageFailures: z.number().int().nonnegative(),
   phraseFlags: z.number().int().nonnegative(),
   worklistItems: z.number().int().nonnegative(),
+  /**
+   * Bibliography entries whose citekey is never referenced in any markdown doc
+   * (reverse linkage; the inverse of `linkageFailures`). INFORMATIONAL — an
+   * uncited entry is a smell (e.g. an LLM-padded reference list), not proof of
+   * fabrication, so it does NOT gate `bibcheck check`. OPTIONAL so the counter
+   * is additive: Output builders predating 0.3.0 that omit it stay valid. NEW
+   * in 0.3.0.
+   */
+  orphanedEntries: z.number().int().nonnegative().optional(),
 });
 export type Summary = z.infer<typeof SummarySchema>;
 
@@ -258,7 +278,14 @@ export type Entry = z.infer<typeof EntrySchema>;
 // Deterministic equivalent of pandoc-citeproc's render-time warning.
 // ---------------------------------------------------------------------------
 
-export const LinkageStatusSchema = z.enum(['resolved', 'unresolved']);
+/**
+ * 'resolved'   — citekey appears in prose AND in the bibliography.
+ * 'unresolved' — citekey appears in prose but NOT in the bibliography (gates).
+ * 'orphan'     — citekey appears in the bibliography but is NOT referenced in
+ *                any prose doc (reverse linkage). INFORMATIONAL; never gates.
+ *                NEW in 0.3.0.
+ */
+export const LinkageStatusSchema = z.enum(['resolved', 'unresolved', 'orphan']);
 export type LinkageStatus = z.infer<typeof LinkageStatusSchema>;
 
 export const LinkageReferenceSchema = z.object({

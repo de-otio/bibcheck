@@ -257,13 +257,19 @@ describe('runLinkage', () => {
 
     const { linkage } = await runLinkage(deps);
 
-    const citekeys = linkage.map((e) => e.citekey);
-    expect(citekeys).toContain('realkey');
-    expect(citekeys).not.toContain('codekey');
+    // @realkey is referenced (resolved). @codekey is ONLY inside a fenced code
+    // block, so it is not counted as a reference — and since it is never cited
+    // in prose, it surfaces as an orphan (reverse linkage), never resolved.
+    const realkey = linkage.find((e) => e.citekey === 'realkey');
+    const codekey = linkage.find((e) => e.citekey === 'codekey');
+    expect(realkey?.status).toBe('resolved');
+    expect(codekey?.status).toBe('orphan');
+    expect(codekey?.references).toEqual([]);
   });
 
-  // 6. No citekey references in any doc → empty linkage.
-  it('returns empty linkage when no citekeys appear in any doc', async () => {
+  // 6. No citekey references in any doc → the lone bibliography entry is an
+  //    orphan (reverse linkage).
+  it('emits the bibliography entry as an orphan when no citekeys appear in any doc', async () => {
     mockDiscoverDocs.mockResolvedValue([
       { path: '/cwd/docs/plain.md', relativePath: 'docs/plain.md' },
     ]);
@@ -280,11 +286,12 @@ describe('runLinkage', () => {
 
     const { linkage } = await runLinkage(deps);
 
-    expect(linkage).toHaveLength(0);
+    expect(linkage).toHaveLength(1);
+    expect(linkage[0]).toMatchObject({ citekey: 'mill1859', status: 'orphan', references: [] });
   });
 
-  // 6b. No docs discovered → empty linkage.
-  it('returns empty linkage when no docs are discovered', async () => {
+  // 6b. No docs discovered → the bibliography entry is still an orphan.
+  it('emits the bibliography entry as an orphan when no docs are discovered', async () => {
     mockDiscoverDocs.mockResolvedValue([]);
 
     const deps: RunLinkageDeps = {
@@ -292,6 +299,28 @@ describe('runLinkage', () => {
       cwd: '/cwd',
       bibliography: [makeEntry('mill1859')],
       readFile: async () => { throw new Error('should not be called'); },
+      signal: liveSignal(),
+    };
+
+    const { linkage } = await runLinkage(deps);
+
+    expect(linkage).toHaveLength(1);
+    expect(linkage[0]).toMatchObject({ citekey: 'mill1859', status: 'orphan', references: [] });
+  });
+
+  // 6c. Empty bibliography + no references → genuinely empty linkage.
+  it('returns empty linkage when bibliography is empty and no citekeys appear', async () => {
+    mockDiscoverDocs.mockResolvedValue([
+      { path: '/cwd/docs/plain.md', relativePath: 'docs/plain.md' },
+    ]);
+
+    const deps: RunLinkageDeps = {
+      config: makeConfig(),
+      cwd: '/cwd',
+      bibliography: [],
+      readFile: makeReadFile({
+        '/cwd/docs/plain.md': 'No citations and no bibliography.\n',
+      }),
       signal: liveSignal(),
     };
 
@@ -317,9 +346,10 @@ describe('runLinkage', () => {
     await expect(runLinkage(deps)).rejects.toThrow();
   });
 
-  // 8. Bibliography with citekey that's NOT referenced → does NOT appear in
-  //    linkage.
-  it('does not emit bibliography entries that have no doc references', async () => {
+  // 8. Reverse linkage (H2): a bibliography citekey that's NOT referenced in any
+  //    doc IS emitted, with status 'orphan' and empty references. A referenced
+  //    citekey is NOT an orphan.
+  it('emits an unreferenced bibliography entry as an orphan; a referenced one is not', async () => {
     mockDiscoverDocs.mockResolvedValue([
       { path: '/cwd/docs/chapter.md', relativePath: 'docs/chapter.md' },
     ]);
@@ -336,9 +366,12 @@ describe('runLinkage', () => {
 
     const { linkage } = await runLinkage(deps);
 
-    const citekeys = linkage.map((e) => e.citekey);
-    expect(citekeys).toContain('referenced');
-    expect(citekeys).not.toContain('unreferenced');
+    const referenced = linkage.find((e) => e.citekey === 'referenced');
+    const orphan = linkage.find((e) => e.citekey === 'unreferenced');
+    expect(referenced?.status).toBe('resolved');
+    expect(orphan).toBeDefined();
+    expect(orphan?.status).toBe('orphan');
+    expect(orphan?.references).toEqual([]);
   });
 
   // 9. Multiple distinct citekeys → multiple LinkageEntry entries, sorted

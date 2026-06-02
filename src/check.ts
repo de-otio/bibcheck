@@ -529,6 +529,10 @@ export async function runCheck(deps: RunCheckDeps): Promise<Output> {
   }
 
   const linkageFailures = linkageResult.linkage.filter((l) => l.status === 'unresolved').length;
+  // Reverse linkage (H2): bibliography citekeys never referenced in any doc.
+  // Informational only — counted for visibility but NOT added to
+  // checkExitReasons, so orphans never affect the exit code.
+  const orphanedEntries = linkageResult.linkage.filter((l) => l.status === 'orphan').length;
   const phraseFlags = phrasesResult.phraseFlags.filter((f) => f.status === 'flagged').length;
   const worklistItems = worklistResult.worklist.length;
 
@@ -543,6 +547,7 @@ export async function runCheck(deps: RunCheckDeps): Promise<Output> {
     linkageFailures,
     phraseFlags,
     worklistItems,
+    orphanedEntries,
   };
 
   // --- Tool info ---

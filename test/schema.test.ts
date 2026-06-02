@@ -186,6 +186,7 @@ describe('LinkageStatusSchema', () => {
   it.each([
     ['resolved', true],
     ['unresolved', true],
+    ['orphan', true],
     ['bogus', false],
   ])('value %s → valid: %s', (value, shouldAccept) => {
     if (shouldAccept) {
@@ -616,6 +617,79 @@ describe('LinkageEntrySchema — populated entries', () => {
       })
     ).not.toThrow();
   });
+
+  it('accepts an orphan entry with empty references (0.3.0 reverse linkage)', () => {
+    expect(() =>
+      LinkageEntrySchema.parse({
+        citekey: 'uncited2000',
+        status: 'orphan',
+        references: [],
+      })
+    ).not.toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 0.3.0 reverse linkage: orphan status + orphanedEntries counter
+// ---------------------------------------------------------------------------
+
+describe('OutputSchema — 0.3.0 orphan linkage', () => {
+  it('accepts an output with an orphan linkage entry and orphanedEntries set', () => {
+    expect(() =>
+      OutputSchema.parse(
+        makeOutput({
+          summary: { ...BASE_SUMMARY, orphanedEntries: 1 },
+          linkage: [{ citekey: 'uncited2000', status: 'orphan', references: [] }],
+        })
+      )
+    ).not.toThrow();
+  });
+
+  it('orphans do NOT count toward the linkageFailures invariant', () => {
+    // linkageFailures must equal the count of UNRESOLVED entries only; an orphan
+    // present alongside zero unresolved keeps linkageFailures at 0.
+    expect(() =>
+      OutputSchema.parse(
+        makeOutput({
+          summary: { ...BASE_SUMMARY, linkageFailures: 0, orphanedEntries: 1 },
+          linkage: [
+            { citekey: 'uncited2000', status: 'orphan', references: [] },
+            { citekey: 'cited2000', status: 'resolved', references: [{ file: 'a.md', line: 1 }] },
+          ],
+        })
+      )
+    ).not.toThrow();
+  });
+
+  it('still rejects when linkageFailures miscounts unresolved even with orphans present', () => {
+    expect(() =>
+      OutputSchema.parse(
+        makeOutput({
+          summary: { ...BASE_SUMMARY, linkageFailures: 0, orphanedEntries: 1 },
+          linkage: [
+            { citekey: 'uncited2000', status: 'orphan', references: [] },
+            { citekey: 'missing', status: 'unresolved', references: [{ file: 'a.md', line: 1 }] },
+          ],
+        })
+      )
+    ).toThrow();
+  });
+
+  it('orphanedEntries is optional — an output omitting it still validates', () => {
+    const out = makeOutput();
+    // BASE_SUMMARY does not include orphanedEntries.
+    expect('orphanedEntries' in out.summary).toBe(false);
+    expect(() => OutputSchema.parse(out)).not.toThrow();
+  });
+
+  it('orphanedEntries rejects -1 and 1.5', () => {
+    expect(() =>
+      SummarySchema.parse({ ...BASE_SUMMARY, orphanedEntries: -1 })
+    ).toThrow();
+    expect(() =>
+      SummarySchema.parse({ ...BASE_SUMMARY, orphanedEntries: 1.5 })
+    ).toThrow();
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -888,8 +962,8 @@ describe('SCHEMA_VERSION', () => {
     expect(SCHEMA_VERSION).toMatch(/^0\.\d+\.\d+$/);
   });
 
-  it('is the string "0.2.0"', () => {
-    expect(SCHEMA_VERSION).toBe('0.2.0');
+  it('is the string "0.3.0"', () => {
+    expect(SCHEMA_VERSION).toBe('0.3.0');
   });
 });
 
