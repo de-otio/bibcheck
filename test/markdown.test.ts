@@ -247,6 +247,69 @@ describe('citekeys.extractCitekeys', () => {
     const refs = extractCitekeys(content, FILE);
     expect(refs.some((r) => r.citekey === 'punctuation_test')).toBe(true);
   });
+
+  it('bare citekeys carry locator null and authorSuppressed false', () => {
+    const refs = extractCitekeys('See @example here.', FILE);
+    expect(refs[0]).toMatchObject({ citekey: 'example', locator: null, authorSuppressed: false });
+  });
+});
+
+describe('citekeys.extractCitekeys — Pandoc grammar (T25)', () => {
+  const FILE = 'test.md';
+
+  it('extracts a bracketed citation', () => {
+    const refs = extractCitekeys('As shown [@mill1859] elsewhere.', FILE);
+    expect(refs).toHaveLength(1);
+    expect(refs[0]).toMatchObject({ citekey: 'mill1859', locator: null, authorSuppressed: false });
+  });
+
+  it('extracts a locator from a bracketed citation', () => {
+    const refs = extractCitekeys('See [@mill1859, p. 42] on liberty.', FILE);
+    expect(refs).toHaveLength(1);
+    expect(refs[0]).toMatchObject({ citekey: 'mill1859', locator: 'p. 42' });
+  });
+
+  it('splits a multi-key bracket and attaches the locator to the right item', () => {
+    const refs = extractCitekeys('[@alpha; @beta, pp. 33-35]', FILE);
+    expect(refs.map((r) => r.citekey)).toEqual(['alpha', 'beta']);
+    expect(refs.find((r) => r.citekey === 'alpha')?.locator).toBeNull();
+    expect(refs.find((r) => r.citekey === 'beta')?.locator).toBe('pp. 33-35');
+  });
+
+  it('detects author suppression both bracketed and bare', () => {
+    const bracketed = extractCitekeys('[-@kant1781]', FILE);
+    expect(bracketed[0]).toMatchObject({ citekey: 'kant1781', authorSuppressed: true });
+    const bare = extractCitekeys('As -@kant1781 argued.', FILE);
+    expect(bare[0]).toMatchObject({ citekey: 'kant1781', authorSuppressed: true });
+  });
+
+  it('ignores a prefix before the key but keeps the locator suffix', () => {
+    const refs = extractCitekeys('[see @smith2020, pp. 1-2]', FILE);
+    expect(refs).toHaveLength(1);
+    expect(refs[0]).toMatchObject({ citekey: 'smith2020', locator: 'pp. 1-2' });
+  });
+
+  it('does not treat a bracket without an @ as a citation', () => {
+    const refs = extractCitekeys('A footnote [1] and a [link](http://x).', FILE);
+    expect(refs).toHaveLength(0);
+  });
+
+  it('does not double-count a key that lives inside a bracket', () => {
+    const refs = extractCitekeys('[@once] should appear exactly once.', FILE);
+    expect(refs.filter((r) => r.citekey === 'once')).toHaveLength(1);
+  });
+
+  it('does not scan inline code spans', () => {
+    const refs = extractCitekeys('Prose @real but `@code_key` is code.', FILE);
+    const keys = refs.map((r) => r.citekey);
+    expect(keys).toContain('real');
+    expect(keys).not.toContain('code_key');
+  });
+
+  it('returns refs in document order (bracket then later bare on same line)', () => {
+    const refs = extractCitekeys('[@first] then @second later.', FILE);
+    expect(refs.map((r) => r.citekey)).toEqual(['first', 'second']);
+  });
 });
 
 // ---------------------------------------------------------------------------

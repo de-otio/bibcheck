@@ -176,10 +176,12 @@ function processFile(
     }
 
     // --- B. paraphrase-with-page-ref ---
-    // Only emit if not already classified as a direct quotation
-    if (!isDirectQuotation && PAGE_REF_RE.test(lineText)) {
+    // Only emit if not already classified as a direct quotation. Fires when the
+    // prose line has a page reference OR the parsed citation carries a locator.
+    if (!isDirectQuotation && (ref.locator !== null || PAGE_REF_RE.test(lineText))) {
       const pageMatch = PAGE_REF_RE.exec(lineText);
-      const pageRef = pageMatch !== null ? pageMatch[0] : '';
+      const locator = ref.locator ?? (pageMatch !== null ? pageMatch[0] : null);
+      const pageRef = locator ?? '';
 
       const verificationUrl = buildVerificationUrl(entry, snippet);
 
@@ -190,6 +192,7 @@ function processFile(
         citation: ref.citekey,
         snippet,
         verificationUrl,
+        locator,
         recommendedAction: `Verify paraphrase against page ${pageRef} of the named edition.`,
       });
     }
@@ -272,6 +275,12 @@ export async function runWorklist(
     const items = processFile(doc.relativePath, content, bibMap, config);
     worklist.push(...items);
   }
+
+  // Deterministic output order (file, line, type) — stable CI diffs.
+  worklist.sort(
+    (a, b) =>
+      a.file.localeCompare(b.file) || a.line - b.line || a.type.localeCompare(b.type),
+  );
 
   return { worklist };
 }

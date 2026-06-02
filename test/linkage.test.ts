@@ -126,6 +126,26 @@ describe('runLinkage', () => {
     });
   });
 
+  it('propagates locator and authorSuppressed onto references (T25)', async () => {
+    mockDiscoverDocs.mockResolvedValue([
+      { path: '/cwd/docs/c.md', relativePath: 'docs/c.md' },
+    ]);
+    const deps: RunLinkageDeps = {
+      config: makeConfig(),
+      cwd: '/cwd',
+      bibliography: [makeEntry('mill1859'), makeEntry('kant1781')],
+      readFile: makeReadFile({
+        '/cwd/docs/c.md': 'See [@mill1859, p. 42] and [-@kant1781].\n',
+      }),
+      signal: liveSignal(),
+    };
+    const { linkage } = await runLinkage(deps);
+    const mill = linkage.find((l) => l.citekey === 'mill1859');
+    const kant = linkage.find((l) => l.citekey === 'kant1781');
+    expect(mill?.references[0]).toMatchObject({ file: 'docs/c.md', line: 1, locator: 'p. 42' });
+    expect(kant?.references[0]).toMatchObject({ authorSuppressed: true });
+  });
+
   // 2. Single doc with @unknownkey AND bibliography is empty → one unresolved
   //    LinkageEntry.
   it('marks a citekey unresolved when bibliography is empty', async () => {

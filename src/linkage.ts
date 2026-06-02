@@ -57,7 +57,10 @@ export async function runLinkage(deps: RunLinkageDeps): Promise<RunLinkageResult
         refs = [];
         referenceMap.set(ref.citekey, refs);
       }
-      refs.push({ file: ref.file, line: ref.line });
+      const linkRef: LinkageReference = { file: ref.file, line: ref.line };
+      if (ref.locator !== null) linkRef.locator = ref.locator;
+      if (ref.authorSuppressed) linkRef.authorSuppressed = true;
+      refs.push(linkRef);
     }
   }
 
@@ -65,6 +68,8 @@ export async function runLinkage(deps: RunLinkageDeps): Promise<RunLinkageResult
   const linkage: LinkageEntry[] = [];
 
   for (const [citekey, references] of referenceMap) {
+    // Stable secondary sort: deterministic regardless of doc-discovery order.
+    references.sort((a, b) => a.file.localeCompare(b.file) || a.line - b.line);
     linkage.push({
       citekey,
       status: bibKeys.has(citekey) ? 'resolved' : 'unresolved',

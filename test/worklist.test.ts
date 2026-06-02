@@ -197,6 +197,23 @@ describe('paraphrase-with-page-ref', () => {
     expect(result.worklist[0]?.recommendedAction).toMatch(/page.*named edition/i);
   });
 
+  it('emits paraphrase-with-page-ref from a bracket locator and sets the locator field (T25)', async () => {
+    const content = 'Mill argued for maximum freedom [@mill1859liberty, p. 42].';
+    const { makeReadFile } = await setupDoc('test-locator.md', content);
+    const entry = makeEntry({ id: 'mill1859liberty', type: 'book' });
+    const config = makeConfig({ docs_include: ['docs/test-locator.md'] });
+    const deps: RunWorklistDeps = {
+      config,
+      cwd: tmpDir,
+      bibliography: [entry],
+      readFile: makeReadFile(),
+      signal: liveSignal(),
+    };
+    const result = await runWorklist(deps);
+    const item = result.worklist.find((i) => i.type === 'paraphrase-with-page-ref');
+    expect(item).toMatchObject({ citation: 'mill1859liberty', locator: 'p. 42' });
+  });
+
   it('does NOT emit paraphrase-with-page-ref for a bare citation without page ref', async () => {
     const content = 'Mill argued for maximum freedom @mill1859liberty.';
 
