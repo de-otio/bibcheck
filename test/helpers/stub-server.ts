@@ -153,9 +153,11 @@ export interface StartStubOptions {
 }
 
 /**
- * Start a localhost stub on an ephemeral port. Always binds 127.0.0.1 so the
- * SSRF guard's private-IP check never applies (the http client only runs the
- * DNS/private-IP guard on cross-host redirects, not on the primary request).
+ * Start a localhost stub on an ephemeral port (binds 127.0.0.1). The http
+ * client now runs the private-IP guard on every hop, so reaching this stub
+ * requires the client's `allowPrivateHosts` escape hatch — which production
+ * enables only when an operator points an `[apis] *_base` at a private host
+ * (see isPrivateApiBase); the guard on bibliography-derived URLs is unaffected.
  */
 export async function startStubServer(opts?: StartStubOptions): Promise<StubServer> {
   const router = opts?.router ?? defaultRouter;

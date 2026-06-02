@@ -17,10 +17,12 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, writeFile, rm } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 
+import * as nodeHttp from 'node:http';
 import { runDoctor, type RunDoctorDeps, type DoctorCheck } from '../src/doctor.js';
 import { ConfigSchema } from '../src/config.js';
 import type { Config } from '../src/config.js';
-import type { HttpClient, HttpHeadResponse } from '../src/http.js';
+import { createHttpClient, type HttpClient, type HttpHeadResponse } from '../src/http.js';
+import { buildUserAgent } from '../src/cli.js';
 
 // ---------------------------------------------------------------------------
 // Fixtures / helpers
@@ -792,5 +794,69 @@ describe('runDoctor — cache size unlimited', () => {
     const sizeCheck = getCheck(result.checks, 'cache-size');
     expect(sizeCheck?.status).toBe('ok');
     expect(sizeCheck?.message).toContain('no limit configured');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// B4: doctor connectivity client carries a polite-pool mailto User-Agent
+// ---------------------------------------------------------------------------
+
+describe('runDoctor — polite-pool User-Agent on connectivity client', () => {
+  it('sends a mailto User-Agent built from openalex_mailto when only it is set', async () => {
+    const bibFile = join(tempDir, 'sources.json');
+    await writeFile(bibFile, JSON.stringify([]), 'utf-8');
+
+    // Capture the User-Agent the connectivity client sends.
+    const seenUserAgents: string[] = [];
+    const server = nodeHttp.createServer((req, res) => {
+      seenUserAgents.push(req.headers['user-agent'] ?? '');
+      res.writeHead(200);
+      res.end();
+    });
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()));
+    const addr = server.address();
+    const port = typeof addr === 'object' && addr !== null ? addr.port : 0;
+    const base = `http://127.0.0.1:${port}`;
+
+    try {
+      // Only openalex_mailto set — UA must still carry it (B4 fallback).
+      const config = ConfigSchema.parse({
+        bibliography: { file: 'sources.json' },
+        apis: {
+          openalex_mailto: 'oa@example.com',
+          crossref_base: base,
+          openalex_base: base,
+          openlibrary_base: base,
+        },
+        phrases: { file: null },
+      }) as Config;
+
+      const cacheDir = resolve(tempDir, config.cache.dir);
+      const fsStub = makeOkFs(cacheDir);
+
+      // Build the real client exactly as the CLI does for doctor, with the
+      // loopback escape hatch so the in-process server is reachable.
+      const http = createHttpClient({
+        userAgent: buildUserAgent(config),
+        allowPrivateHosts: true,
+      });
+
+      const result = await runDoctor({
+        config,
+        cwd: tempDir,
+        http,
+        signal: AbortSignal.timeout(30_000),
+        fs: fsStub,
+      });
+
+      // Connectivity checks should have run and reached the server.
+      expect(getCheck(result.checks, 'crossref-connectivity')?.status).toBe('ok');
+      expect(seenUserAgents.length).toBeGreaterThan(0);
+      for (const ua of seenUserAgents) {
+        expect(ua).toBe('bibcheck/0.0.0 (mailto:oa@example.com)');
+      }
+    } finally {
+      await new Promise<void>((r) => server.close(() => r()));
+    }
   });
 });

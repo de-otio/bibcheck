@@ -14,6 +14,7 @@
 
 import PQueue from 'p-queue';
 import { lookup as dnsLookup } from 'node:dns/promises';
+import { isIP } from 'node:net';
 import type { Cache } from './cache/fs-cache.js';
 
 // ---------------------------------------------------------------------------
@@ -55,6 +56,13 @@ export interface CreateHttpClientOptions {
   retryBaseMs?: number;
   perOriginConcurrency?: number;
   totalDeadlineMs?: number;
+  /**
+   * Test-only escape hatch. When true, the per-hop private-IP SSRF guard is
+   * skipped so the in-process loopback test server (127.0.0.1) is reachable.
+   * Production callers MUST leave this unset/false — the secure default rejects
+   * private addresses on every hop.
+   */
+  allowPrivateHosts?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -80,29 +88,102 @@ export class HttpError extends Error {
 // SSRF helpers
 // ---------------------------------------------------------------------------
 
-export function isPrivateIp(ip: string): boolean {
-  // IPv6 special cases
-  if (ip === '::1') return true;
-  // fc00::/7 — addresses starting with fc or fd
-  if (/^fc[0-9a-f]{2}:/i.test(ip) || /^fd[0-9a-f]{2}:/i.test(ip)) return true;
-  // fe80::/10
-  if (/^fe[89ab][0-9a-f]:/i.test(ip)) return true;
-
-  // IPv4
-  const parts = ip.split('.').map(Number);
-  if (parts.length !== 4) return false;
-  const [a, b, c] = parts;
-  /* c8 ignore next */
-  if (a === undefined || b === undefined || c === undefined) return false; // unreachable: length checked above
-  // noUncheckedIndexedAccess: array destructuring checked by length guard above
-
-  if (a === 127) return true;                          // 127.0.0.0/8
+/**
+ * Classify a dotted-quad IPv4 (a.b.c.d, each octet already a number) as private
+ * / non-routable. Covers loopback, RFC 1918, link-local, "this host", and the
+ * CGNAT shared range.
+ */
+function isPrivateIpv4Octets(a: number, b: number): boolean {
+  if (a === 0) return true;                            // 0.0.0.0/8 ("this host")
+  if (a === 127) return true;                          // 127.0.0.0/8 loopback
   if (a === 10) return true;                           // 10.0.0.0/8
-  if (a === 172 && b >= 16 && b <= 31) return true;   // 172.16.0.0/12
+  if (a === 172 && b >= 16 && b <= 31) return true;    // 172.16.0.0/12
   if (a === 192 && b === 168) return true;             // 192.168.0.0/16
-  if (a === 169 && b === 254) return true;             // 169.254.0.0/16
+  if (a === 169 && b === 254) return true;             // 169.254.0.0/16 link-local
+  if (a === 100 && b >= 64 && b <= 127) return true;   // 100.64.0.0/10 CGNAT
+  return false;
+}
+
+/**
+ * Parse a non-dotted IPv4 literal (decimal, octal, or hex) into a 32-bit
+ * number, e.g. "2130706433" or "0x7f000001" → 0x7f000001. Returns null when
+ * the string is not a single-integer IPv4 form. URL/WHATWG parsing already
+ * accepts these as hostnames, so we must classify them too.
+ */
+function parseIntegerIpv4(host: string): number | null {
+  let n: number;
+  if (/^0x[0-9a-f]+$/i.test(host)) {
+    n = parseInt(host, 16);
+  } else if (/^0[0-7]+$/.test(host)) {
+    n = parseInt(host, 8);
+  } else if (/^[0-9]+$/.test(host)) {
+    n = parseInt(host, 10);
+  } else {
+    return null;
+  }
+  if (!Number.isFinite(n) || n < 0 || n > 0xffffffff) return null;
+  return n >>> 0;
+}
+
+export function isPrivateIp(ip: string): boolean {
+  const lower = ip.toLowerCase();
+
+  // IPv6 loopback / ULA / link-local.
+  if (lower === '::1') return true;
+  if (/^fc[0-9a-f]{2}:/.test(lower) || /^fd[0-9a-f]{2}:/.test(lower)) return true; // fc00::/7
+  if (/^fe[89ab][0-9a-f]:/.test(lower)) return true;                               // fe80::/10
+
+  // IPv4-mapped / -compatible IPv6 (e.g. ::ffff:127.0.0.1, ::ffff:7f00:1).
+  // Re-classify the embedded IPv4 portion.
+  if (lower.startsWith('::ffff:') || lower.startsWith('::')) {
+    const tail = lower.slice(lower.lastIndexOf(':') + 1);
+    if (/^\d+\.\d+\.\d+\.\d+$/.test(tail)) {
+      return isPrivateIp(tail);
+    }
+  }
+
+  // Dotted-quad IPv4.
+  if (/^\d+\.\d+\.\d+\.\d+$/.test(lower)) {
+    const parts = lower.split('.').map(Number);
+    const [a, b] = parts;
+    /* c8 ignore next */
+    if (a === undefined || b === undefined) return false; // unreachable: regex guarantees 4 octets
+    return isPrivateIpv4Octets(a, b);
+  }
+
+  // Single-integer IPv4 (decimal / octal / hex).
+  const n = parseIntegerIpv4(lower);
+  if (n !== null) {
+    const a = (n >>> 24) & 0xff;
+    const b = (n >>> 16) & 0xff;
+    return isPrivateIpv4Octets(a, b);
+  }
 
   return false;
+}
+
+/**
+ * Decide whether a configured API base URL targets a private / loopback host.
+ *
+ * The per-hop SSRF guard exists to stop *untrusted bibliography URLs* reaching
+ * internal addresses. The `[apis] *_base` endpoints, by contrast, are
+ * operator-controlled configuration; pointing them at `http://127.0.0.1:PORT`
+ * (a local stub or dev mirror) is a legitimate, explicit choice. Callers use
+ * this to opt a configured-endpoint client into `allowPrivateHosts` so the
+ * operator's deliberate localhost config is honored without weakening the guard
+ * on bibliography-derived URLs. Returns false for any unparseable / public base.
+ */
+export function isPrivateApiBase(baseUrl: string | null | undefined): boolean {
+  if (baseUrl == null || baseUrl === '') return false;
+  let host: string;
+  try {
+    host = new URL(baseUrl).hostname.toLowerCase();
+  } catch {
+    return false;
+  }
+  if (host.startsWith('[') && host.endsWith(']')) host = host.slice(1, -1);
+  if (host === 'localhost') return true;
+  return isPrivateIp(host);
 }
 
 export function isHostAllowed(host: string, whitelist: string[]): boolean {
@@ -119,12 +200,33 @@ export function isHostAllowed(host: string, whitelist: string[]): boolean {
 // Internal: per-request SSRF guard
 // ---------------------------------------------------------------------------
 
+/**
+ * Validate a single hop's URL: enforce http/https scheme and reject any
+ * private / non-routable destination. Literal-IP hostnames (dotted-quad,
+ * IPv6, decimal/octal/hex integer, IPv4-mapped) are classified directly; a
+ * DNS name is resolved and every returned address is checked.
+ */
 async function assertNotPrivate(url: string): Promise<void> {
   const parsed = new URL(url);
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
     throw new HttpError(`rejected: unsupported scheme ${parsed.protocol}`);
   }
-  const hostname = parsed.hostname;
+  // WHATWG URL strips brackets from IPv6 hostnames; isIP handles both families.
+  let hostname = parsed.hostname;
+  if (hostname.startsWith('[') && hostname.endsWith(']')) {
+    hostname = hostname.slice(1, -1);
+  }
+
+  // If the hostname is itself an address literal (in any form the URL parser
+  // accepts), classify it without a DNS round-trip — DNS would not be consulted
+  // for these at connect time anyway.
+  if (isIP(hostname) !== 0 || /^\d+\.\d+\.\d+\.\d+$/.test(hostname) || parseIntegerIpv4(hostname) !== null) {
+    if (isPrivateIp(hostname)) {
+      throw new HttpError('rejected: private IP');
+    }
+    return;
+  }
+
   let addresses: Array<{ address: string }>;
   try {
     addresses = await dnsLookup(hostname, { all: true });
@@ -143,7 +245,27 @@ async function assertNotPrivate(url: string): Promise<void> {
 // ---------------------------------------------------------------------------
 
 function isRetryableStatus(status: number): boolean {
-  return status >= 500;
+  // 429 (Too Many Requests) and 503 (Service Unavailable) are explicitly
+  // retryable per the polite-pool etiquette; both commonly carry Retry-After.
+  // All other 5xx are retried too.
+  return status === 429 || status >= 500;
+}
+
+/**
+ * Parse a Retry-After header value into a delay in milliseconds, or null if it
+ * is absent / unparseable. Accepts delta-seconds ("120") and an HTTP-date.
+ * `now` is injectable for deterministic tests.
+ */
+export function parseRetryAfterMs(value: string | undefined, now: number = Date.now()): number | null {
+  if (value === undefined) return null;
+  const trimmed = value.trim();
+  if (trimmed === '') return null;
+  if (/^\d+$/.test(trimmed)) {
+    return parseInt(trimmed, 10) * 1000;
+  }
+  const dateMs = Date.parse(trimmed);
+  if (Number.isNaN(dateMs)) return null;
+  return Math.max(0, dateMs - now);
 }
 
 function isNetworkError(err: unknown): boolean {
@@ -249,6 +371,23 @@ export function createHttpClient(opts?: CreateHttpClientOptions): HttpClient {
   const retryBaseMs = opts?.retryBaseMs ?? 250;
   const perOriginConcurrency = opts?.perOriginConcurrency ?? 2;
   const totalDeadlineMs = opts?.totalDeadlineMs ?? 30_000;
+  const allowPrivateHosts = opts?.allowPrivateHosts === true;
+
+  // Guard a single hop. The `allowPrivateHosts` test escape hatch bypasses the
+  // private-IP check (so the in-process loopback test server, which only listens
+  // on 127.0.0.1, is reachable across redirects). The scheme restriction is
+  // always enforced, even in test mode. Production callers leave the hatch off,
+  // so every hop — hop 0 and every redirect — is fully guarded.
+  async function guardHop(hopUrl: string): Promise<void> {
+    if (allowPrivateHosts) {
+      const proto = new URL(hopUrl).protocol;
+      if (proto !== 'http:' && proto !== 'https:') {
+        throw new HttpError(`rejected: unsupported scheme ${proto}`);
+      }
+      return;
+    }
+    await assertNotPrivate(hopUrl);
+  }
 
   const queues = new Map<string, PQueue>();
 
@@ -273,6 +412,9 @@ export function createHttpClient(opts?: CreateHttpClientOptions): HttpClient {
       const startTime = Date.now();
       let lastError: unknown;
       let lastStatus: number | undefined;
+      // When a retryable response carries Retry-After, prefer it over the
+      // jittered backoff for the *next* sleep.
+      let retryAfterMs: number | null = null;
 
       for (let attempt = 0; attempt <= maxRetries; attempt++) {
         if (userSignal !== undefined && userSignal.aborted) {
@@ -288,12 +430,14 @@ export function createHttpClient(opts?: CreateHttpClientOptions): HttpClient {
         if (userSignal !== undefined) signals.push(userSignal);
         const combined = AbortSignal.any(signals);
 
+        retryAfterMs = null;
         try {
           const result = await fn(combined);
 
           if (isRetryableStatus(result.status)) {
             lastStatus = result.status;
             lastError = new HttpError(`HTTP ${result.status}`, result.status);
+            retryAfterMs = parseRetryAfterMs(result.headers['retry-after']);
           } else {
             return result;
           }
@@ -310,8 +454,12 @@ export function createHttpClient(opts?: CreateHttpClientOptions): HttpClient {
         }
 
         if (attempt < maxRetries) {
-          const delay = backoffMs(attempt, retryBaseMs);
           const remaining = Math.max(0, totalDeadlineMs - (Date.now() - startTime));
+          // Honor Retry-After when present; otherwise use jittered backoff.
+          // Either way the sleep is capped against the total deadline so a
+          // hostile/large Retry-After cannot stall the run past its budget.
+          const baseDelay = retryAfterMs !== null ? retryAfterMs : backoffMs(attempt, retryBaseMs);
+          const delay = Math.min(baseDelay, remaining);
           const sleepSignals: AbortSignal[] = [AbortSignal.timeout(remaining)];
           if (userSignal !== undefined) sleepSignals.push(userSignal);
           const sleepSig = AbortSignal.any(sleepSignals);
@@ -369,6 +517,8 @@ export function createHttpClient(opts?: CreateHttpClientOptions): HttpClient {
     const userSignal = headOpts?.signal;
 
     if (!followRedirects) {
+      // SSRF guard on the (only) hop: scheme + private-IP rejection.
+      await guardHop(url);
       const origin = new URL(url).origin;
       const result = await withRetry(
         origin,
@@ -381,13 +531,9 @@ export function createHttpClient(opts?: CreateHttpClientOptions): HttpClient {
 
     const redirectChain: string[] = [];
     let currentUrl = url;
-    // Validate the scheme of the initial URL (but not IP — caller controls it).
-    const initialParsed = new URL(currentUrl);
-    if (initialParsed.protocol !== 'http:' && initialParsed.protocol !== 'https:') {
-      throw new HttpError(`rejected: unsupported scheme ${initialParsed.protocol}`);
-    }
-    // Track the initial hostname so same-host redirects bypass the SSRF IP check.
-    const initialHostname = initialParsed.hostname;
+    // SSRF guard on hop 0 (the initial URL) — scheme + private-IP rejection —
+    // *before* any request is dispatched.
+    await guardHop(currentUrl);
 
     for (;;) {
       const origin = new URL(currentUrl).origin;
@@ -410,18 +556,10 @@ export function createHttpClient(opts?: CreateHttpClientOptions): HttpClient {
         }
         redirectChain.push(currentUrl);
         const nextUrl = new URL(location, currentUrl).href;
-        const nextHostname = new URL(nextUrl).hostname;
-        // SSRF guard for redirect targets that move to a different host.
-        // Same-host redirects are allowed (the caller already chose to connect).
-        if (nextHostname !== initialHostname) {
-          await assertNotPrivate(nextUrl);
-        } else {
-          // Still reject non-http(s) schemes even for same-host redirects.
-          const nextProto = new URL(nextUrl).protocol;
-          if (nextProto !== 'http:' && nextProto !== 'https:') {
-            throw new HttpError(`rejected: unsupported scheme ${nextProto}`);
-          }
-        }
+        // SSRF guard on EVERY redirect hop, regardless of host equality:
+        // scheme + private-IP rejection. Redirect hops are never exempted by
+        // the test escape hatch.
+        await guardHop(nextUrl);
         currentUrl = nextUrl;
         continue;
       }
@@ -477,6 +615,23 @@ export async function headCheck(
   }
 
   let result: HeadCheckResult;
+
+  // SSRF: enforce the trusted-host allowlist on the INPUT host BEFORE
+  // dispatching any request. A bibliography entry pointing at a metadata
+  // endpoint or an untrusted host must never be fetched at all.
+  let inputHost: string;
+  try {
+    inputHost = new URL(url).hostname.toLowerCase();
+  } catch {
+    const out: HeadCheckResult = { ok: false, reason: 'network-error', details: 'invalid URL' };
+    if (opts.cache !== undefined) await opts.cache.set(cacheKey, out);
+    return out;
+  }
+  if (!isHostAllowed(inputHost, opts.trustedHosts)) {
+    const out: HeadCheckResult = { ok: false, reason: 'wrong-host', details: inputHost };
+    if (opts.cache !== undefined) await opts.cache.set(cacheKey, out);
+    return out;
+  }
 
   try {
     const response = await opts.http.head(url, { signal });

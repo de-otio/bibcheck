@@ -40,7 +40,7 @@ import { OutputSchema, SCHEMA_VERSION } from './schema/output.js';
 import { loadBibliography, BibliographyParseError } from './schema/csl.js';
 import { loadDenylist, PhraseLoaderError } from './phrases/load.js';
 import { createFsCache } from './cache/fs-cache.js';
-import { createHttpClient } from './http.js';
+import { createHttpClient, isPrivateApiBase } from './http.js';
 import {
   createCrossRefClient,
   createOpenAlexClient,
@@ -160,12 +160,20 @@ export async function buildCheckDeps(opts: BuildCheckDepsOptions): Promise<RunCh
     maxSizeMb: config.cache.max_size_mb ?? null,
   });
 
-  // Create HTTP client
+  // Create HTTP client. If the operator has explicitly pointed any DB API base
+  // at a private/loopback host (e.g. a local stub or mirror), honor that
+  // deliberate config by allowing private hosts. The per-hop SSRF guard still
+  // protects untrusted bibliography URLs in the default (public-API) case.
+  const allowPrivateHosts =
+    isPrivateApiBase(config.apis.crossref_base) ||
+    isPrivateApiBase(config.apis.openalex_base) ||
+    isPrivateApiBase(config.apis.openlibrary_base);
   const http = createHttpClient({
     userAgent: userAgent ?? 'bibcheck/0.0.0',
     defaultTimeoutMs: 10_000,
     maxRetries: 2,
     perOriginConcurrency: 2,
+    allowPrivateHosts,
   });
 
   return {

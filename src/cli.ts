@@ -18,7 +18,7 @@ import type { Config } from './config.js';
 import { buildCheckDeps, runCheck, checkExitReasons, buildSuppressionContext } from './check.js';
 import type { Logger } from './check.js';
 import { createMemoryCache } from './cache/fs-cache.js';
-import { createHttpClient } from './http.js';
+import { createHttpClient, isPrivateApiBase } from './http.js';
 import { renderJson } from './output/json.js';
 import { renderMarkdown } from './output/markdown.js';
 import { renderSarif } from './output/sarif.js';
@@ -62,6 +62,19 @@ interface DoctorOpts extends GlobalOpts {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * Build the polite-pool User-Agent. Includes a `mailto:` from whichever email
+ * is configured (preferring crossref_mailto, then openalex_mailto) so the
+ * project stays in the providers' polite pools and is throttled less. Exported
+ * for testing.
+ */
+export function buildUserAgent(config: Config): string {
+  const mailto = config.apis.crossref_mailto ?? config.apis.openalex_mailto ?? null;
+  return mailto != null && mailto !== ''
+    ? `bibcheck/0.0.0 (mailto:${mailto})`
+    : 'bibcheck/0.0.0';
+}
 
 function buildLogger(): Logger {
   return {
@@ -148,9 +161,7 @@ async function runCheckCommand(
     throw err;
   }
 
-  const userAgent = config.apis.crossref_mailto != null
-    ? `bibcheck/0.0.0 (mailto:${config.apis.crossref_mailto})`
-    : 'bibcheck/0.0.0';
+  const userAgent = buildUserAgent(config);
 
   let deps = await buildCheckDeps({
     config,
@@ -212,7 +223,13 @@ async function runDoctorCommand(opts: DoctorOpts): Promise<void> {
     }
   }
 
-  const http = createHttpClient({ userAgent: 'bibcheck/0.0.0' });
+  // Honor an operator who explicitly points an API base at a private/loopback
+  // host (local stub/mirror); see buildCheckDeps for the rationale.
+  const allowPrivateHosts =
+    isPrivateApiBase(config.apis.crossref_base) ||
+    isPrivateApiBase(config.apis.openalex_base) ||
+    isPrivateApiBase(config.apis.openlibrary_base);
+  const http = createHttpClient({ userAgent: buildUserAgent(config), allowPrivateHosts });
 
   // Doctor module is implemented by T14 concurrently. Import dynamically so
   // that compilation succeeds even if the file is not yet finalised, and fall

@@ -9,8 +9,10 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { buildProgram } from '../src/cli.js';
+import { buildProgram, buildUserAgent } from '../src/cli.js';
 import { Command } from 'commander';
+import { ConfigSchema } from '../src/config.js';
+import type { Config } from '../src/config.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -325,6 +327,38 @@ describe('no subcommand', () => {
 // ---------------------------------------------------------------------------
 // buildProgram is idempotent — each call returns a fresh Command
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// buildUserAgent — polite-pool UA construction (B4)
+// ---------------------------------------------------------------------------
+
+describe('buildUserAgent', () => {
+  function cfg(overrides: Record<string, unknown> = {}): Config {
+    return ConfigSchema.parse(overrides) as Config;
+  }
+
+  it('includes crossref_mailto when set', () => {
+    const ua = buildUserAgent(cfg({ apis: { crossref_mailto: 'cr@example.com' } }));
+    expect(ua).toBe('bibcheck/0.0.0 (mailto:cr@example.com)');
+  });
+
+  it('falls back to openalex_mailto when only it is set', () => {
+    const ua = buildUserAgent(cfg({ apis: { openalex_mailto: 'oa@example.com' } }));
+    expect(ua).toBe('bibcheck/0.0.0 (mailto:oa@example.com)');
+  });
+
+  it('prefers crossref_mailto over openalex_mailto when both are set', () => {
+    const ua = buildUserAgent(
+      cfg({ apis: { crossref_mailto: 'cr@example.com', openalex_mailto: 'oa@example.com' } }),
+    );
+    expect(ua).toBe('bibcheck/0.0.0 (mailto:cr@example.com)');
+  });
+
+  it('omits mailto when neither is configured', () => {
+    const ua = buildUserAgent(cfg());
+    expect(ua).toBe('bibcheck/0.0.0');
+  });
+});
 
 describe('buildProgram', () => {
   it('returns a new Command instance on each call', () => {
