@@ -18,8 +18,11 @@
 import type { HttpClient, HttpResponse } from '../http.js';
 import type { Cache } from '../cache/fs-cache.js';
 import type { DatabaseLookupResult, DatabaseClient } from './crossref.js';
+import { trimTrailingSlash } from './crossref.js';
 
 export type { DatabaseLookupResult, DatabaseClient };
+
+const DEFAULT_WORLDCAT_BASE = 'http://classify.oclc.org';
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -29,6 +32,8 @@ export interface WorldCatClientOptions {
   http: HttpClient;
   cache: Cache;
   apiKey?: string | null; // reserved for v0.2 OAuth2; unused in v0.1
+  /** Base URL for the Classify endpoint. Defaults to the public endpoint. */
+  baseUrl?: string;
 }
 
 export interface WorldCatClient extends DatabaseClient {
@@ -130,6 +135,7 @@ function mapClassifyMetadata(
 export function createWorldCatClient(opts: WorldCatClientOptions): WorldCatClient {
   const { http, cache } = opts;
   // apiKey is reserved for v0.2; ignored in v0.1.
+  const base = trimTrailingSlash(opts.baseUrl ?? DEFAULT_WORLDCAT_BASE);
 
   async function lookupByIsbn(isbn: string, signal?: AbortSignal): Promise<DatabaseLookupResult> {
     const cacheKey = `worldcat:lookupByIsbn:${isbn}`;
@@ -140,7 +146,7 @@ export function createWorldCatClient(opts: WorldCatClientOptions): WorldCatClien
     }
 
     // v0.1: HTTP (not HTTPS) — legacy Classify endpoint does not support HTTPS.
-    const url = `http://classify.oclc.org/classify2/api?isbn=${encodeURIComponent(isbn)}&summary=true`;
+    const url = `${base}/classify2/api?isbn=${encodeURIComponent(isbn)}&summary=true`;
 
     let response: HttpResponse;
     try {

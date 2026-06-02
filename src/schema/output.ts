@@ -2,12 +2,28 @@
  * bibcheck output JSON schema — the contract consumers (LLM agents, CI tools,
  * editor integrations) read.
  *
+ * FROZEN. This schema is the contract every renderer and consumer reads;
+ * changes require a surfaced design decision (see tmp/design-review/) and a
+ * `SCHEMA_VERSION` bump. Do not edit ad hoc.
+ *
  * Versioned independently of the package version via `SCHEMA_VERSION` below.
  * Bumping rules:
  *   - Additive changes (new optional fields, new enum members on otherwise-open
  *     types) bump the minor part and remain backward-compatible.
  *   - Renames, removals, or changed semantics bump the major part; consumers
  *     pinning a major version are insulated.
+ *
+ * 0.2.0 (Phase 5 — hallucination-hardening): added the existence evidence
+ * vocabulary (`ExistenceEvidenceSchema`) and verification-boundary fields
+ * (`evidence` / `checkedFor` / `notCheckedFor` / `error` on the existence
+ * layer); the per-entry `IdentifiersLayerSchema` (local DOI/ISBN/URL
+ * well-formedness); the `notFoundInDatabases` + `malformedIdentifiers`
+ * summary counters with existence-bucket reconciliation; and the optional
+ * `locator` / `authorSuppressed` linkage/worklist fields for the
+ * citation-parser swap. The new per-entry/summary fields are presently
+ * OPTIONAL so that the v0.1 producer (which does not yet populate them) keeps
+ * emitting valid documents; T21/T22/T25 populate them and a follow-up tightens
+ * them to required (see the `TODO(T22)` markers below).
  *
  * Authoritative documentation is the Zod schemas in this file. The published
  * JSON Schema in `docs/output-schema.md` (when generated) is derived from
@@ -17,7 +33,7 @@
 import { z } from 'zod';
 
 /** Current bibcheck output schema version. Independent of the package version. */
-export const SCHEMA_VERSION = '0.1.0' as const;
+export const SCHEMA_VERSION = '0.2.0' as const;
 
 /**
  * Accepts any URL whose scheme is http or https. Rejects non-web schemes
@@ -46,6 +62,19 @@ export const SummarySchema = z.object({
   totalEntries: z.number().int().nonnegative(),
   verified: z.number().int().nonnegative(),
   metadataMismatches: z.number().int().nonnegative(),
+  /**
+   * Entries confirmed absent from every applicable database (a fabrication
+   * signal; gates by default per Q1). NEW in 0.2.0.
+   */
+  // TODO(T22): tighten to required once check.ts populates this
+  notFoundInDatabases: z.number().int().nonnegative().optional(),
+  /**
+   * Entries with at least one malformed/bad-checksum identifier in the
+   * `identifiers` layer (a cheap fabrication signal; gates by default). NEW
+   * in 0.2.0.
+   */
+  // TODO(T22): tighten to required once check.ts populates this (via T21)
+  malformedIdentifiers: z.number().int().nonnegative().optional(),
   unverifiable: z.number().int().nonnegative(),
   canonicalIssues: z.number().int().nonnegative(),
   linkageFailures: z.number().int().nonnegative(),
@@ -65,6 +94,9 @@ export const ExistenceCheckSourceSchema = z.enum([
   'crossref',
   'openalex',
   'openlibrary',
+  // TODO(T22): remove 'worldcat' when the dead OCLC Classify client is deleted
+  // (OCLC Classify retired 2019; see tmp/design-review/worldcat.md). Kept now
+  // so src/databases/worldcat.ts and its callers still typecheck.
   'worldcat',
 ]);
 export type ExistenceCheckSource = z.infer<typeof ExistenceCheckSourceSchema>;
@@ -94,11 +126,92 @@ export const ExistenceStatusSchema = z.enum([
 ]);
 export type ExistenceStatus = z.infer<typeof ExistenceStatusSchema>;
 
+/**
+ * Defined per-entry evidence vocabulary, distinct from the bare `status`
+ * rollup, so an LLM-agent consumer cannot read `verified` as "the citation's
+ * claim is sound" (Q2). Deliberately discrete — there is NO numeric confidence
+ * score anywhere in this schema (barred by the project's "no uncalibrated
+ * confidence scores" design default); the vocabulary is the calibrated
+ * alternative.
+ */
+export const ExistenceEvidenceSchema = z.enum([
+  'exists-metadata-match',     // found + metadata agrees
+  'exists-metadata-mismatch',  // found, but metadata differs
+  'absent',                    // confirmed not-found in all applicable databases
+  'unverifiable',              // no applicable identifier, or all sources errored
+]);
+export type ExistenceEvidence = z.infer<typeof ExistenceEvidenceSchema>;
+
+/**
+ * The verification dimensions bibcheck can report on. Used by the existence
+ * layer's `checkedFor` / `notCheckedFor` arrays to state explicitly what was
+ * and was NOT checked. `claim-support` (does the source actually support the
+ * prose's claim?) is never checked automatically — it is the manual worklist's
+ * job — so it always appears in `notCheckedFor` for v0.1.
+ */
+export const CheckDimensionSchema = z.enum([
+  'existence',
+  'metadata',
+  'canonical-url',
+  'claim-support',
+]);
+export type CheckDimension = z.infer<typeof CheckDimensionSchema>;
+
 export const ExistenceLayerSchema = z.object({
   status: ExistenceStatusSchema,
+  /** Defined evidence vocabulary (Q2). NEW in 0.2.0. */
+  // TODO(T22): tighten to required once check.ts populates this
+  evidence: ExistenceEvidenceSchema.optional(),
+  /** Dimensions that were checked, e.g. ['existence','metadata']. NEW in 0.2.0. */
+  // TODO(T22): tighten to required once check.ts populates this
+  checkedFor: z.array(CheckDimensionSchema).optional(),
+  /**
+   * Dimensions that were NOT checked. Always includes 'claim-support' for
+   * v0.1 (bibcheck never verifies whether the source supports the prose's
+   * claim; that is the manual worklist's job). NEW in 0.2.0.
+   */
+  // TODO(T22): tighten to required once check.ts populates this
+  notCheckedFor: z.array(CheckDimensionSchema).optional(),
   checks: z.array(ExistenceCheckSchema),
+  /**
+   * Set when the layer crashed (vs. a clean unverifiable result), so consumers
+   * can distinguish "we ran and found nothing applicable" from "we failed to
+   * run." NEW in 0.2.0 (also addresses S1).
+   */
+  // TODO(T22): tighten to required once check.ts populates this
+  error: z.string().nullable().optional(),
 });
 export type ExistenceLayer = z.infer<typeof ExistenceLayerSchema>;
+
+// ---------------------------------------------------------------------------
+// Layer 0: identifiers (local, pre-network well-formedness)
+//
+// A pure, local check of DOI/ISBN/URL well-formedness, run BEFORE any network
+// existence lookup (Q5 / T21). Kept as its own per-entry layer — sibling to
+// `existence` and `canonical` — so "is the identifier well-formed" stays
+// cleanly distinct from "does the work exist," and so sibling bibliography-
+// hygiene checks can grow into the same space later. A malformed identifier is
+// a strong, cheap fabrication signal and gates by default (consistent with the
+// Q1 secure default).
+// ---------------------------------------------------------------------------
+
+export const IdentifierStatusSchema = z.enum([
+  'ok',
+  'malformed',
+  'bad-checksum',
+  'not-applicable',
+]);
+export type IdentifierStatus = z.infer<typeof IdentifierStatusSchema>;
+
+export const IdentifiersLayerSchema = z.object({
+  /** 'malformed' if the DOI fails `^10\.\d{4,}/\S+$`. */
+  doi: IdentifierStatusSchema,
+  /** 'bad-checksum' for a failed ISBN-10/13 check digit; 'malformed' for bad shape. */
+  isbn: IdentifierStatusSchema,
+  /** 'malformed' if the URL is not a well-formed http/https URL. */
+  url: IdentifierStatusSchema,
+});
+export type IdentifiersLayer = z.infer<typeof IdentifiersLayerSchema>;
 
 // ---------------------------------------------------------------------------
 // Layer 1: canonical-edition URL verification (differentiated)
@@ -133,6 +246,12 @@ export type CanonicalLayer = z.infer<typeof CanonicalLayerSchema>;
 
 export const EntrySchema = z.object({
   citekey: z.string().min(1),
+  /**
+   * Layer 0 local identifier well-formedness (pre-network). Null when not run.
+   * NEW in 0.2.0 (Q5 / T21).
+   */
+  // TODO(T22): tighten to required (.nullable() only) once check.ts populates this
+  identifiers: IdentifiersLayerSchema.nullable().optional(),
   /** Layer 1 existence findings (commodity layer). Null when not run. */
   existence: ExistenceLayerSchema.nullable(),
   /** Layer 1 canonical-edition findings (differentiated layer). Null when not run. */
@@ -153,6 +272,10 @@ export type LinkageStatus = z.infer<typeof LinkageStatusSchema>;
 export const LinkageReferenceSchema = z.object({
   file: z.string().min(1),
   line: z.number().int().positive(),
+  /** Citation locator, e.g. 'p. 42', 'pp. 33-35'. NEW in 0.2.0 (T25 populates). */
+  locator: z.string().nullable().optional(),
+  /** True when the citation suppressed the author, e.g. '-@key'. NEW in 0.2.0 (T25). */
+  authorSuppressed: z.boolean().optional(),
 });
 export type LinkageReference = z.infer<typeof LinkageReferenceSchema>;
 
@@ -226,6 +349,8 @@ export const WorklistItemSchema = z.object({
   verificationUrl: httpUrl().nullable(),
   /** Human-readable description of what the manual check should establish. */
   recommendedAction: z.string().min(1),
+  /** Citation locator, e.g. 'p. 42', 'pp. 33-35'. NEW in 0.2.0 (T25 populates). */
+  locator: z.string().nullable().optional(),
 });
 export type WorklistItem = z.infer<typeof WorklistItemSchema>;
 
@@ -276,6 +401,46 @@ export const OutputSchema = z
         path: ['summary', 'canonicalIssues'],
         message: `canonicalIssues (${o.summary.canonicalIssues}) cannot exceed totalEntries (${o.summary.totalEntries})`,
       });
+    }
+    // New 0.2.0 counters. Each invariant is guarded so it only fires once the
+    // relevant optional counter is present — pre-T22 producers omit them and
+    // must keep validating.
+    if (
+      o.summary.notFoundInDatabases !== undefined &&
+      o.summary.notFoundInDatabases > o.summary.totalEntries
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['summary', 'notFoundInDatabases'],
+        message: `notFoundInDatabases (${o.summary.notFoundInDatabases}) cannot exceed totalEntries (${o.summary.totalEntries})`,
+      });
+    }
+    if (
+      o.summary.malformedIdentifiers !== undefined &&
+      o.summary.malformedIdentifiers > o.summary.totalEntries
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['summary', 'malformedIdentifiers'],
+        message: `malformedIdentifiers (${o.summary.malformedIdentifiers}) cannot exceed totalEntries (${o.summary.totalEntries})`,
+      });
+    }
+    // Existence-bucket reconciliation: every entry lands in exactly one
+    // existence bucket. Only enforceable once `notFoundInDatabases` is present
+    // (the bucket count it represents was unmodelled before 0.2.0).
+    if (o.summary.notFoundInDatabases !== undefined) {
+      const bucketSum =
+        o.summary.verified +
+        o.summary.metadataMismatches +
+        o.summary.notFoundInDatabases +
+        o.summary.unverifiable;
+      if (bucketSum !== o.summary.totalEntries) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['summary'],
+          message: `existence buckets (verified + metadataMismatches + notFoundInDatabases + unverifiable = ${bucketSum}) must sum to totalEntries (${o.summary.totalEntries})`,
+        });
+      }
     }
     if (o.summary.phraseFlags !== o.phraseFlags.filter(f => f.status === 'flagged').length) {
       ctx.addIssue({

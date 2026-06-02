@@ -1,5 +1,5 @@
 {
-  "name": "bibcheck",
+  "name": "@de-otio/bibcheck",
   "version": "0.0.0",
   "description": "Humanities-aware citation verification for CSL-JSON bibliographies. Canonical-edition URL verification, Pandoc-citeproc-style linkage check, structured human-triage worklist generation, and an opt-in project-supplied phrase denylist.",
   "keywords": [

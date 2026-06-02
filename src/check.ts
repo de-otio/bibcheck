@@ -79,10 +79,8 @@ export interface RunCheckDeps {
   cache: Cache;
   logger: Logger;
   signal: AbortSignal;
-  // Skip selection (used by per-subcommand CLI invocations and --offline mode)
+  // Skip selection (used by per-subcommand CLI invocations)
   skip?: ReadonlySet<'existence' | 'canonical' | 'linkage' | 'phrases' | 'worklist'>;
-  // Network policy
-  offline?: boolean;
   // Optional injection point for readFile (for tests)
   readFile?: (path: string) => Promise<string>;
   // Optional injectable subcommand functions (for tests)
@@ -104,7 +102,6 @@ export interface BuildCheckDepsOptions {
   logger?: Logger;
   worldcatApiKey?: string | null;
   userAgent?: string;
-  offline?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -118,7 +115,6 @@ export async function buildCheckDeps(opts: BuildCheckDepsOptions): Promise<RunCh
     signal,
     worldcatApiKey,
     userAgent,
-    offline,
   } = opts;
   const logger = opts.logger ?? noopLogger;
 
@@ -170,24 +166,6 @@ export async function buildCheckDeps(opts: BuildCheckDepsOptions): Promise<RunCh
     cache,
     logger,
     signal,
-    offline,
-  };
-}
-
-// ---------------------------------------------------------------------------
-// Offline HTTP stub
-// ---------------------------------------------------------------------------
-
-/**
- * Wrap an HttpClient so that every request throws. The cache layer in each
- * database client is consulted first; if the cache misses, this stub throws.
- * Used to implement --offline mode.
- */
-function makeOfflineHttp(): HttpClient {
-  const err = () => Promise.reject(new Error('Network request blocked: offline mode'));
-  return {
-    get: err,
-    head: err,
   };
 }
 
@@ -257,7 +235,6 @@ export async function runCheck(deps: RunCheckDeps): Promise<Output> {
     logger,
     signal,
     skip,
-    offline,
     readFile = (p: string) => nodeReadFile(p, 'utf-8'),
     _runExistence: doRunExistence = runExistence,
     _runCanonical: doRunCanonical = runCanonical,
@@ -265,8 +242,6 @@ export async function runCheck(deps: RunCheckDeps): Promise<Output> {
     _runPhrases: doRunPhrases = runPhrases,
     _runWorklist: doRunWorklist = runWorklist,
   } = deps;
-
-  const effectiveHttp = offline === true ? makeOfflineHttp() : http;
 
   const SUBCOMMAND_TIMEOUT_MS = 300_000; // 5 minutes
 
@@ -288,22 +263,29 @@ export async function runCheck(deps: RunCheckDeps): Promise<Output> {
   if (!skip?.has('existence')) {
     try {
       const crossref = createCrossRefClient({
-        http: effectiveHttp,
+        http,
         cache,
         mailto: config.apis.crossref_mailto ?? undefined,
+        baseUrl: config.apis.crossref_base,
       });
       const openalex = createOpenAlexClient({
-        http: effectiveHttp,
+        http,
         cache,
         mailto: config.apis.openalex_mailto ?? undefined,
+        baseUrl: config.apis.openalex_base,
       });
-      const openlibrary = createOpenLibraryClient({ http: effectiveHttp, cache });
+      const openlibrary = createOpenLibraryClient({
+        http,
+        cache,
+        baseUrl: config.apis.openlibrary_base,
+      });
       const worldcat = createWorldCatClient({
-        http: effectiveHttp,
+        http,
         cache,
         apiKey: deps.config.apis.worldcat_key_env
           ? process.env[deps.config.apis.worldcat_key_env] ?? null
           : null,
+        baseUrl: config.apis.worldcat_base,
       });
 
       const existenceDeps: RunExistenceDeps = {
@@ -315,6 +297,27 @@ export async function runCheck(deps: RunCheckDeps): Promise<Output> {
       const result = await doRunExistence(existenceDeps);
       for (const e of result.entries) {
         existenceMap.set(e.citekey, e.existence);
+      }
+
+      // Surface transport failures explicitly. An entry whose existence checks
+      // are *all* transport errors (DNS/connect failure, 5xx after retries)
+      // must not be silently treated as a clean "unverifiable" pass. We do not
+      // change gating here (that is T22's concern) — we emit a clear,
+      // actionable top-level message so the failure is not masked as success.
+      const transportFailed = result.entries.filter(
+        (e) =>
+          e.existence.checks.length > 0 &&
+          e.existence.checks.every((c) => c.result === 'error'),
+      );
+      if (transportFailed.length > 0) {
+        logger.error('existence.transport_failure', {
+          message:
+            'Could not reach one or more bibliographic databases. ' +
+            'Existence could not be verified — this is a connectivity error, ' +
+            'not a confirmation that the works are absent. Check your network ' +
+            'connection and the [apis] base URLs in bibcheck.toml.',
+          affectedEntries: transportFailed.map((e) => e.citekey),
+        });
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -332,7 +335,7 @@ export async function runCheck(deps: RunCheckDeps): Promise<Output> {
       const canonicalDeps: RunCanonicalDeps = {
         config,
         bibliography,
-        http: effectiveHttp,
+        http,
         cache,
         signal: subSignal(),
       };

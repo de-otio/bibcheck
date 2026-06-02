@@ -51,7 +51,6 @@ interface GlobalOpts {
   format: Format;
   output?: string;
   noCache?: boolean;
-  offline?: boolean;
   cwd: string;
 }
 
@@ -164,7 +163,6 @@ async function runCheckCommand(
     logger,
     worldcatApiKey,
     userAgent,
-    offline: opts.offline,
   });
 
   if (opts.noCache === true) {
@@ -285,7 +283,6 @@ function addGlobalOptions(cmd: Command): Command {
     )
     .option('--output <path>', 'write output to file instead of stdout')
     .option('--no-cache', 'disable cache (use in-memory cache)')
-    .option('--offline', 'skip outbound network (cache-only mode)')
     .option('--cwd <path>', 'working directory', process.cwd());
 }
 
@@ -299,7 +296,6 @@ function resolveGlobalOpts(cmd: Command): GlobalOpts {
     format?: string;
     output?: string;
     cache: boolean; // commander flips --no-cache to cache=false
-    offline?: boolean;
     cwd: string;
   }>();
 
@@ -312,7 +308,6 @@ function resolveGlobalOpts(cmd: Command): GlobalOpts {
     format,
     output: opts.output,
     noCache: opts.cache === false,
-    offline: opts.offline,
     cwd: opts.cwd,
   };
 }

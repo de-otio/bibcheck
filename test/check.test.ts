@@ -47,7 +47,15 @@ const defaultConfig: Config = {
   phrases: { file: null },
   source_types: {},
   edition_discipline: {},
-  apis: { crossref_mailto: null, openalex_mailto: null, worldcat_key_env: null },
+  apis: {
+    crossref_mailto: null,
+    openalex_mailto: null,
+    worldcat_key_env: null,
+    crossref_base: 'https://api.crossref.org',
+    openalex_base: 'https://api.openalex.org',
+    openlibrary_base: 'https://openlibrary.org',
+    worldcat_base: 'http://classify.oclc.org',
+  },
   cache: { dir: '.bibcheck-cache', max_size_mb: 256 },
 };
 
@@ -921,57 +929,187 @@ describe('runCheck – summary counts', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Offline mode
+// Network policy: offline mode removed (Q3). Network-bound subcommands always
+// use the injected real http; transport failure must surface clearly and must
+// NOT be silently masked as a clean "unverifiable" pass.
+//
+// These re-express the former offline-mode unit tests as injected-http tests
+// (offline mode no longer exists).
 // ---------------------------------------------------------------------------
 
-describe('runCheck – offline mode', () => {
-  it('offline=true: subcommands receive a stub http that throws; cache hits still work', async () => {
-    const entry = makeEntry('smith2000');
-    // In offline mode the injected _runExistence receives a different http client;
-    // we verify the subcommand was still called (it would use the offline http internally,
-    // but since we mock _runExistence, we just verify the run completes).
-    const doRunExistence = vi.fn().mockResolvedValue({
-      entries: [{ citekey: 'smith2000', existence: verifiedExistence() }],
-    } satisfies RunExistenceResult);
+describe('runCheck – transport failure is surfaced, not masked', () => {
+  it('a DNS/connect failure on every existence source logs existence.transport_failure', async () => {
+    const { HttpError } = await import('../src/http.js');
+    const entry = makeEntry('smith2000', { doi: '10.1234/x' });
+    const logger = makeMockLogger();
+
+    // Real runExistence runs; the injected http rejects every request with a
+    // transport-style HttpError (as the real client does on ENOTFOUND).
+    const failingHttp: HttpClient = {
+      get: vi.fn().mockRejectedValue(new HttpError('DNS resolution failed for example.com')),
+      head: vi.fn().mockRejectedValue(new HttpError('DNS resolution failed for example.com')),
+    };
 
     const deps = makeBaseDeps({
       bibliography: [entry],
-      offline: true,
-      _runExistence: doRunExistence,
+      logger,
+      http: failingHttp,
+      // Use the real existence runner so the per-source 'error' results are produced.
+      _runExistence: undefined,
+      // Skip canonical so it does not also try the failing http for this DOI-bearing entry.
+      skip: new Set(['canonical', 'linkage', 'phrases', 'worklist']),
     });
 
     const output = await runCheck(deps);
-    expect(doRunExistence).toHaveBeenCalled();
-    expect(output.summary.totalEntries).toBe(1);
+
+    // Existence could not be verified — but it is NOT silently passed off as a
+    // clean state: a clear, actionable transport-failure message is logged.
+    expect(output.entries[0]?.existence?.status).toBe('unverifiable');
+    expect(logger.error).toHaveBeenCalledWith(
+      'existence.transport_failure',
+      expect.objectContaining({ affectedEntries: ['smith2000'] }),
+    );
+    // The http client (not a no-op offline stub) was actually called.
+    expect(failingHttp.get).toHaveBeenCalled();
     expect(() => OutputSchema.parse(output)).not.toThrow();
+  });
+
+  it('successful existence lookups do not log a transport failure', async () => {
+    const entry = makeEntry('smith2000');
+    const logger = makeMockLogger();
+    const deps = makeBaseDeps({
+      bibliography: [entry],
+      logger,
+      _runExistence: vi.fn().mockResolvedValue({
+        entries: [{ citekey: 'smith2000', existence: verifiedExistence() }],
+      } satisfies RunExistenceResult),
+    });
+
+    await runCheck(deps);
+    expect(logger.error).not.toHaveBeenCalledWith(
+      'existence.transport_failure',
+      expect.anything(),
+    );
   });
 });
 
 // ---------------------------------------------------------------------------
-// Offline mode – http stub actually blocks network calls
+// Configurable [apis] base URLs are honoured by the live DB clients.
+//
+// Drives the *real* runExistence through runCheck with an injected http that
+// (a) records every requested URL and (b) returns canned 200/404 bodies. This
+// exercises the crossref/openalex base-URL construction and their found / 404
+// branches without any network. (The per-subcommand integration tests run the
+// built CLI in a subprocess, which the in-process coverage instrument cannot
+// see; this in-process test gives the DB clients real branch coverage.)
 // ---------------------------------------------------------------------------
 
-describe('runCheck – offline mode http stub', () => {
-  it('offline=true with injected existence: run still completes', async () => {
-    const doRunExistence = vi.fn().mockResolvedValue({ entries: [] } satisfies RunExistenceResult);
+describe('runCheck – configurable [apis] base URLs', () => {
+  function configWithBase(base: string): Config {
+    return {
+      ...defaultConfig,
+      apis: {
+        ...defaultConfig.apis,
+        crossref_base: base,
+        openalex_base: base,
+        openlibrary_base: base,
+        worldcat_base: base,
+      },
+    };
+  }
+
+  function cannedHttp(handler: (url: string) => { status: number; body: unknown }): {
+    http: HttpClient;
+    urls: string[];
+  } {
+    const urls: string[] = [];
+    const http: HttpClient = {
+      get: vi.fn(async (url: string) => {
+        urls.push(url);
+        const { status, body } = handler(url);
+        return { status, headers: { 'content-type': 'application/json' }, body };
+      }),
+      head: vi.fn(async (url: string) => {
+        urls.push(url);
+        return { status: 200, finalUrl: url, redirectChain: [] };
+      }),
+    };
+    return { http, urls };
+  }
+
+  it('builds DOI lookup URLs from the configured base and verifies a found work', async () => {
+    const base = 'https://stub.example.test';
+    const entry = makeEntry('smith2000', { doi: '10.1234/found' });
+    const { http, urls } = cannedHttp(() => ({
+      // CrossRef success shape and OpenAlex work object (no title/author → match).
+      status: 200,
+      body: { status: 'ok', message: { DOI: '10.1234/found' } },
+    }));
+
     const deps = makeBaseDeps({
-      offline: true,
-      _runExistence: doRunExistence,
+      config: configWithBase(base),
+      bibliography: [entry],
+      http,
+      _runExistence: undefined, // use the real runner
+      skip: new Set(['canonical', 'linkage', 'phrases', 'worklist']),
     });
 
     const output = await runCheck(deps);
-    expect(doRunExistence).toHaveBeenCalled();
+
+    // Every request went to the configured base, never the public endpoints.
+    expect(urls.length).toBeGreaterThan(0);
+    expect(urls.every((u) => u.startsWith(base))).toBe(true);
+    expect(urls.some((u) => u.includes('/works/'))).toBe(true);
+    // A found work with no title/author short-circuits to verified.
+    expect(output.entries[0]?.existence?.status).toBe('verified');
     expect(() => OutputSchema.parse(output)).not.toThrow();
   });
 
-  it('offline=true with all subcommands skipped: completes with empty output', async () => {
+  it('treats a 404 from both DOI sources as not-found-in-databases (does not gate)', async () => {
+    const base = 'https://stub.example.test';
+    const entry = makeEntry('fake2099', { doi: '10.9999/nonexistent' });
+    const { http } = cannedHttp(() => ({ status: 404, body: { status: 'error' } }));
+
     const deps = makeBaseDeps({
-      offline: true,
-      skip: new Set(['existence', 'canonical', 'linkage', 'phrases', 'worklist']),
+      config: configWithBase(base),
+      bibliography: [entry],
+      http,
+      _runExistence: undefined,
+      skip: new Set(['canonical', 'linkage', 'phrases', 'worklist']),
     });
 
     const output = await runCheck(deps);
-    expect(output.summary.totalEntries).toBe(0);
+    expect(output.entries[0]?.existence?.status).toBe('not-found-in-databases');
+    // not-found does NOT gate (T22 owns gating semantics).
+    expect(checkExitReasons(output)).toEqual([]);
+    expect(() => OutputSchema.parse(output)).not.toThrow();
+  });
+
+  it('builds ISBN lookup URLs (OpenLibrary + WorldCat) from the configured base', async () => {
+    const base = 'https://stub.example.test';
+    const entry = makeEntry('book2000', { isbn: '978-0-14-043207-9' });
+    const { http, urls } = cannedHttp((url) => {
+      if (url.includes('/api/books')) {
+        // OpenLibrary found body, no title/author → match.
+        return { status: 200, body: { 'ISBN:978-0-14-043207-9': { publish_date: '2000' } } };
+      }
+      // WorldCat Classify found body.
+      return { status: 200, body: { classify: { work: {} } } };
+    });
+
+    const deps = makeBaseDeps({
+      config: configWithBase(base),
+      bibliography: [entry],
+      http,
+      _runExistence: undefined,
+      skip: new Set(['canonical', 'linkage', 'phrases', 'worklist']),
+    });
+
+    const output = await runCheck(deps);
+    expect(urls.every((u) => u.startsWith(base))).toBe(true);
+    expect(urls.some((u) => u.includes('/api/books'))).toBe(true);
+    expect(urls.some((u) => u.includes('/classify2/api'))).toBe(true);
+    expect(output.entries[0]?.existence?.status).toBe('verified');
     expect(() => OutputSchema.parse(output)).not.toThrow();
   });
 });

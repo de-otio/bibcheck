@@ -11,7 +11,7 @@
 import type { HttpClient, HttpResponse } from '../http.js';
 import type { Cache } from '../cache/fs-cache.js';
 import type { DatabaseLookupResult, DatabaseClient } from './crossref.js';
-import { stripMailto, sanitizeMailto } from './crossref.js';
+import { stripMailto, sanitizeMailto, trimTrailingSlash } from './crossref.js';
 
 // Re-export so consumers can import from this module too.
 export type { DatabaseLookupResult, DatabaseClient };
@@ -24,7 +24,11 @@ export interface OpenAlexClientOptions {
   http: HttpClient;
   cache: Cache;
   mailto?: string | null;
+  /** Base URL for the OpenAlex API. Defaults to the public endpoint. */
+  baseUrl?: string;
 }
+
+const DEFAULT_OPENALEX_BASE = 'https://api.openalex.org';
 
 export interface OpenAlexClient extends DatabaseClient {
   readonly name: 'openalex';
@@ -105,6 +109,7 @@ function appendMailto(url: string, mailto: string | null | undefined): string {
 
 export function createOpenAlexClient(opts: OpenAlexClientOptions): OpenAlexClient {
   const { http, cache, mailto } = opts;
+  const base = trimTrailingSlash(opts.baseUrl ?? DEFAULT_OPENALEX_BASE);
 
   async function lookupByDoi(doi: string, signal?: AbortSignal): Promise<DatabaseLookupResult> {
     const cacheKey = `openalex:lookupByDoi:${doi.toLowerCase()}`;
@@ -115,7 +120,7 @@ export function createOpenAlexClient(opts: OpenAlexClientOptions): OpenAlexClien
     }
 
     const encoded = encodeURIComponent(doi);
-    const baseUrl = `https://api.openalex.org/works/doi:${encoded}`;
+    const baseUrl = `${base}/works/doi:${encoded}`;
     const url = appendMailto(baseUrl, mailto);
 
     let response: HttpResponse;
@@ -150,7 +155,7 @@ export function createOpenAlexClient(opts: OpenAlexClientOptions): OpenAlexClien
       return cached;
     }
 
-    const baseUrl = `https://api.openalex.org/works?search=${encodeURIComponent(title)}&filter=author.display_name.search:${encodeURIComponent(firstAuthor)}&per-page=5`;
+    const baseUrl = `${base}/works?search=${encodeURIComponent(title)}&filter=author.display_name.search:${encodeURIComponent(firstAuthor)}&per-page=5`;
     const url = appendMailto(baseUrl, mailto);
 
     let response: HttpResponse;

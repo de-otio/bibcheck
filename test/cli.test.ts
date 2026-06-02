@@ -214,11 +214,18 @@ describe('program structure', () => {
     expect(optNames).toContain('--no-cache');
   });
 
-  it('check subcommand has --offline option', () => {
+  it('check subcommand does NOT have --offline option (removed in Q3)', () => {
     const program = buildProgram();
     const check = program.commands.find((c) => c.name() === 'check');
     const optNames = check!.options.map((o) => o.long);
-    expect(optNames).toContain('--offline');
+    expect(optNames).not.toContain('--offline');
+  });
+
+  it('doctor subcommand does NOT have --offline option (removed in Q3)', () => {
+    const program = buildProgram();
+    const doctor = program.commands.find((c) => c.name() === 'doctor');
+    const optNames = doctor!.options.map((o) => o.long);
+    expect(optNames).not.toContain('--offline');
   });
 
   it('check subcommand has --output option', () => {

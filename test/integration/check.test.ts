@@ -2,19 +2,28 @@
  * Integration tests for `bibcheck check` and per-subcommand variants.
  *
  * All tests run against the **built** dist/cli.js, not source.
- * All network-bound checks use --offline for determinism.
+ *
+ * Determinism: `--offline` was removed in decision Q3. Network-bound checks
+ * (existence, canonical) now run against a hermetic localhost HTTP stub
+ * (test/helpers/stub-server.ts). Each fixture is materialised into a fresh
+ * temp directory whose bibcheck.toml points the `[apis] *_base` URLs at the
+ * stub, so the spawned CLI subprocess reaches localhost and never the public
+ * internet. The stub is torn down after each test.
  *
  * SARIF validation uses a local stub schema (test/fixtures/sarif-2.1.0.schema.json).
  * If the schema file is missing, the SARIF structural test falls back to basic
  * property assertions.
  */
 
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterEach } from 'vitest';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { readFile, access } from 'node:fs/promises';
+import { readFile, access, cp, mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+import { startStubServer, writeStubConfig, type StubServer } from '../helpers/stub-server.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -61,8 +70,24 @@ async function runCli(args: string[], cwd: string): Promise<CliResult> {
 }
 
 // ---------------------------------------------------------------------------
-// Build guard
+// Hermetic harness: one stub + per-test temp fixture copies
 // ---------------------------------------------------------------------------
+
+let stub: StubServer;
+const tempDirs: string[] = [];
+
+/**
+ * Copy a fixture dir into a fresh temp dir and rewrite its bibcheck.toml so
+ * the `[apis] *_base` URLs target the stub. Returns the temp dir to use as the
+ * CLI's cwd. Cleaned up in afterEach.
+ */
+async function stubbedFixture(fixtureDir: string): Promise<string> {
+  const dir = await mkdtemp(path.join(tmpdir(), 'bibcheck-it-'));
+  tempDirs.push(dir);
+  await cp(fixtureDir, dir, { recursive: true });
+  await writeStubConfig({ dir, baseUrl: stub.baseUrl });
+  return dir;
+}
 
 beforeAll(async () => {
   try {
@@ -74,16 +99,30 @@ beforeAll(async () => {
   }
 }, 60_000);
 
+beforeEach(async () => {
+  stub = await startStubServer();
+});
+
+afterEach(async () => {
+  await stub.close();
+  await Promise.all(tempDirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
+});
+
 // ---------------------------------------------------------------------------
 // known-good fixture
 // ---------------------------------------------------------------------------
 
 describe('known-good fixture', () => {
-  it('exits 0 with --offline (no phrase flags, no linkage failures, no canonical issues)', async () => {
-    const result = await runCli(['check', '--format', 'json', '--offline'], KNOWN_GOOD);
-    // In offline mode existence is unverifiable but that does not cause exit 1.
-    // All entries have DOI/ISBN so canonical is not-applicable — no canonical issues.
+  it('exits 0 (existence verified against stub, no phrase/linkage/canonical issues)', async () => {
+    const cwd = await stubbedFixture(KNOWN_GOOD);
+    const result = await runCli(['check', '--format', 'json'], cwd);
     expect(result.code).toBe(0);
+
+    // Hermeticity guarantee: the spawned CLI's existence lookups hit the
+    // localhost stub, not the public APIs. If it had reached real CrossRef/
+    // OpenAlex the returned (real) titles would diverge from the fixture and
+    // existence would flip to a gating metadata-mismatch (exit 1).
+    expect(stub.requestCount()).toBeGreaterThan(0);
 
     const output = JSON.parse(result.stdout) as Record<string, unknown>;
     expect(output).toBeDefined();
@@ -93,14 +132,16 @@ describe('known-good fixture', () => {
     expect(summary['linkageFailures']).toBe(0);
     expect(summary['canonicalIssues']).toBe(0);
     expect(summary['worklistItems']).toBe(0);
+    // Existence is verified (not unverifiable) because the stub returns matches.
+    expect(summary['metadataMismatches']).toBe(0);
   });
 
   it('JSON output validates against OutputSchema shape', async () => {
-    const result = await runCli(['check', '--format', 'json', '--offline'], KNOWN_GOOD);
+    const cwd = await stubbedFixture(KNOWN_GOOD);
+    const result = await runCli(['check', '--format', 'json'], cwd);
     const output = JSON.parse(result.stdout) as Record<string, unknown>;
 
-    // Top-level keys present
-    expect(output).toHaveProperty('schemaVersion', '0.1.0');
+    expect(output).toHaveProperty('schemaVersion', '0.2.0');
     expect(output).toHaveProperty('tool');
     expect(output).toHaveProperty('summary');
     expect(output).toHaveProperty('entries');
@@ -108,7 +149,6 @@ describe('known-good fixture', () => {
     expect(output).toHaveProperty('phraseFlags');
     expect(output).toHaveProperty('worklist');
 
-    // All citekeys resolve
     const linkage = output['linkage'] as Array<Record<string, unknown>>;
     for (const entry of linkage) {
       expect(entry['status']).toBe('resolved');
@@ -121,59 +161,47 @@ describe('known-good fixture', () => {
 // ---------------------------------------------------------------------------
 
 describe('known-bad fixture', () => {
-  it('exits 1 with --offline', async () => {
-    const result = await runCli(
-      ['check', '--format', 'json', '--offline'],
-      KNOWN_BAD,
-    );
+  it('exits 1', async () => {
+    const cwd = await stubbedFixture(KNOWN_BAD);
+    const result = await runCli(['check', '--format', 'json'], cwd);
     expect(result.code).toBe(1);
   });
 
   it('reports phraseFlags >= 1', async () => {
-    const result = await runCli(
-      ['check', '--format', 'json', '--offline'],
-      KNOWN_BAD,
-    );
+    const cwd = await stubbedFixture(KNOWN_BAD);
+    const result = await runCli(['check', '--format', 'json'], cwd);
     const output = JSON.parse(result.stdout) as Record<string, unknown>;
     const summary = output['summary'] as Record<string, number>;
     expect(summary['phraseFlags']).toBeGreaterThanOrEqual(1);
   });
 
   it('reports linkageFailures >= 1', async () => {
-    const result = await runCli(
-      ['check', '--format', 'json', '--offline'],
-      KNOWN_BAD,
-    );
+    const cwd = await stubbedFixture(KNOWN_BAD);
+    const result = await runCli(['check', '--format', 'json'], cwd);
     const output = JSON.parse(result.stdout) as Record<string, unknown>;
     const summary = output['summary'] as Record<string, number>;
     expect(summary['linkageFailures']).toBeGreaterThanOrEqual(1);
   });
 
   it('reports worklistItems >= 1', async () => {
-    const result = await runCli(
-      ['check', '--format', 'json', '--offline'],
-      KNOWN_BAD,
-    );
+    const cwd = await stubbedFixture(KNOWN_BAD);
+    const result = await runCli(['check', '--format', 'json'], cwd);
     const output = JSON.parse(result.stdout) as Record<string, unknown>;
     const summary = output['summary'] as Record<string, number>;
     expect(summary['worklistItems']).toBeGreaterThanOrEqual(1);
   });
 
   it('linkage array contains at least one unresolved entry', async () => {
-    const result = await runCli(
-      ['check', '--format', 'json', '--offline'],
-      KNOWN_BAD,
-    );
+    const cwd = await stubbedFixture(KNOWN_BAD);
+    const result = await runCli(['check', '--format', 'json'], cwd);
     const output = JSON.parse(result.stdout) as Record<string, unknown>;
     const linkage = output['linkage'] as Array<Record<string, unknown>>;
     expect(linkage.some((l) => l['status'] === 'unresolved')).toBe(true);
   });
 
   it('phraseFlags array contains at least one flagged entry', async () => {
-    const result = await runCli(
-      ['check', '--format', 'json', '--offline'],
-      KNOWN_BAD,
-    );
+    const cwd = await stubbedFixture(KNOWN_BAD);
+    const result = await runCli(['check', '--format', 'json'], cwd);
     const output = JSON.parse(result.stdout) as Record<string, unknown>;
     const phraseFlags = output['phraseFlags'] as Array<Record<string, unknown>>;
     expect(phraseFlags.some((f) => f['status'] === 'flagged')).toBe(true);
@@ -186,12 +214,14 @@ describe('known-bad fixture', () => {
 
 describe('minimal fixture', () => {
   it('exits 0 with empty bibliography', async () => {
-    const result = await runCli(['check', '--format', 'json'], MINIMAL);
+    const cwd = await stubbedFixture(MINIMAL);
+    const result = await runCli(['check', '--format', 'json'], cwd);
     expect(result.code).toBe(0);
   });
 
   it('emits empty arrays for all finding categories', async () => {
-    const result = await runCli(['check', '--format', 'json'], MINIMAL);
+    const cwd = await stubbedFixture(MINIMAL);
+    const result = await runCli(['check', '--format', 'json'], cwd);
     const output = JSON.parse(result.stdout) as Record<string, unknown>;
 
     expect(output['entries']).toEqual([]);
@@ -201,7 +231,8 @@ describe('minimal fixture', () => {
   });
 
   it('summary counts are all zero', async () => {
-    const result = await runCli(['check', '--format', 'json'], MINIMAL);
+    const cwd = await stubbedFixture(MINIMAL);
+    const result = await runCli(['check', '--format', 'json'], cwd);
     const output = JSON.parse(result.stdout) as Record<string, unknown>;
     const summary = output['summary'] as Record<string, number>;
 
@@ -219,20 +250,16 @@ describe('minimal fixture', () => {
 
 describe('--format markdown', () => {
   it('produces markdown output containing the report heading', async () => {
-    const result = await runCli(
-      ['check', '--format', 'markdown', '--offline'],
-      MINIMAL,
-    );
+    const cwd = await stubbedFixture(MINIMAL);
+    const result = await runCli(['check', '--format', 'markdown'], cwd);
     expect(result.stdout).toContain('# bibcheck report');
   });
 });
 
 describe('--format sarif', () => {
   it('produces valid SARIF with version "2.1.0" and a runs array', async () => {
-    const result = await runCli(
-      ['check', '--format', 'sarif', '--offline'],
-      MINIMAL,
-    );
+    const cwd = await stubbedFixture(MINIMAL);
+    const result = await runCli(['check', '--format', 'sarif'], cwd);
     const sarifObj = JSON.parse(result.stdout) as Record<string, unknown>;
 
     expect(sarifObj['version']).toBe('2.1.0');
@@ -240,7 +267,6 @@ describe('--format sarif', () => {
   });
 
   it('validates against the SARIF 2.1.0 JSON Schema using ajv (if schema available)', async () => {
-    // Load the SARIF schema — if not present, skip validation.
     let schemaAvailable = true;
     let schemaContent: string;
     try {
@@ -251,8 +277,8 @@ describe('--format sarif', () => {
     }
 
     if (!schemaAvailable) {
-      // Stub structural check
-      const result = await runCli(['check', '--format', 'sarif', '--offline'], MINIMAL);
+      const cwd = await stubbedFixture(MINIMAL);
+      const result = await runCli(['check', '--format', 'sarif'], cwd);
       const sarif = JSON.parse(result.stdout) as Record<string, unknown>;
       expect(sarif['version']).toBe('2.1.0');
       expect(Array.isArray(sarif['runs'])).toBe(true);
@@ -261,7 +287,6 @@ describe('--format sarif', () => {
 
     const schema = JSON.parse(schemaContent) as Record<string, unknown>;
 
-    // Dynamically import ajv (it is a devDependency).
     const ajvModule = (await import('ajv')) as unknown as {
       default: new (opts?: Record<string, unknown>) => {
         compile: (schema: unknown) => {
@@ -274,15 +299,12 @@ describe('--format sarif', () => {
 
     const validate = ajv.compile(schema);
 
-    const result = await runCli(
-      ['check', '--format', 'sarif', '--offline'],
-      KNOWN_BAD,
-    );
+    const cwd = await stubbedFixture(KNOWN_BAD);
+    const result = await runCli(['check', '--format', 'sarif'], cwd);
     const sarif = JSON.parse(result.stdout) as unknown;
     const valid = validate(sarif);
 
     if (!valid) {
-      // Surface errors for debugging
       const errors = (validate.errors ?? [])
         .slice(0, 5)
         .map((e) => `${e.instancePath ?? ''} ${e.message ?? ''}`)
@@ -295,22 +317,55 @@ describe('--format sarif', () => {
 });
 
 // ---------------------------------------------------------------------------
-// doctor command
+// doctor command — connectivity against the stub
 // ---------------------------------------------------------------------------
 
 describe('bibcheck doctor', () => {
-  it('exits 0 against the minimal fixture and mentions "Node version"', async () => {
-    const result = await runCli(['doctor', '--offline'], MINIMAL);
-    // Doctor makes network calls to CrossRef/OpenAlex etc.; those may fail.
-    // Exit 0 means all checks passed (or only warn, not fail).
-    // If there is a network failure, the checks for those APIs report fail.
-    // We relax to checking that the output mentions Node version regardless.
+  it('exits 0 against the minimal fixture with connectivity targeting the stub', async () => {
+    const cwd = await stubbedFixture(MINIMAL);
+    const result = await runCli(['doctor'], cwd);
+    // Node/config/bibliography checks pass; connectivity hits the stub (200) → ok.
+    expect(result.code).toBe(0);
     expect(result.stdout.toLowerCase()).toMatch(/node/);
   });
 
+  it('reports connectivity checks as ok when the stub answers', async () => {
+    const cwd = await stubbedFixture(MINIMAL);
+    const result = await runCli(['doctor'], cwd);
+    expect(result.stdout).toMatch(/crossref-connectivity/);
+    // Connectivity check should be ok against the stub (any non-5xx response).
+    const crossrefLine = result.stdout
+      .split('\n')
+      .find((l) => l.includes('crossref-connectivity'));
+    expect(crossrefLine).toMatch(/^ok/);
+  });
+
   it('mentions "Node version" check in the output', async () => {
-    const result = await runCli(['doctor', '--offline'], MINIMAL);
+    const cwd = await stubbedFixture(MINIMAL);
+    const result = await runCli(['doctor'], cwd);
     expect(result.stdout).toMatch(/node-version|Node v\d+/i);
+  });
+
+  it('connectivity fails fast (no hang) when pointed at a refused port', async () => {
+    // Point the config at a closed localhost port so the connect is refused
+    // immediately. This is the previously-flaky connectivity test, now
+    // deterministic and hermetic. The connect is refused (ECONNREFUSED) and
+    // the client's bounded retry/backoff resolves quickly — it must not hang
+    // on the per-attempt network timeout (5s × 3 attempts × 4 endpoints).
+    const cwd = await stubbedFixture(MINIMAL);
+    // Overwrite the stub config to target a port nothing is listening on.
+    await writeStubConfig({ dir: cwd, baseUrl: 'http://127.0.0.1:1' });
+    const start = Date.now();
+    const result = await runCli(['doctor'], cwd);
+    const elapsed = Date.now() - start;
+    // Connectivity failures make doctor exit 1 (a 'fail' check).
+    expect(result.code).toBe(1);
+    const crossrefLine = result.stdout
+      .split('\n')
+      .find((l) => l.includes('crossref-connectivity'));
+    expect(crossrefLine).toMatch(/^fail/);
+    // Refused connects resolve via fast backoff, nowhere near the timeout path.
+    expect(elapsed).toBeLessThan(15000);
   });
 });
 
@@ -320,28 +375,22 @@ describe('bibcheck doctor', () => {
 
 describe('bibcheck phrases (standalone)', () => {
   it('exits 1 on known-bad (phrase flag is a non-zero-exit reason)', async () => {
-    const result = await runCli(
-      ['phrases', '--format', 'json', '--offline'],
-      KNOWN_BAD,
-    );
+    const cwd = await stubbedFixture(KNOWN_BAD);
+    const result = await runCli(['phrases', '--format', 'json'], cwd);
     expect(result.code).toBe(1);
   });
 
   it('exits 0 on known-good (no denylist configured, no patterns)', async () => {
-    const result = await runCli(
-      ['phrases', '--format', 'json', '--offline'],
-      KNOWN_GOOD,
-    );
+    const cwd = await stubbedFixture(KNOWN_GOOD);
+    const result = await runCli(['phrases', '--format', 'json'], cwd);
     expect(result.code).toBe(0);
     const output = JSON.parse(result.stdout) as Record<string, unknown>;
     expect((output['phraseFlags'] as unknown[]).length).toBe(0);
   });
 
   it('exits 0 on minimal (empty bibliography, no patterns)', async () => {
-    const result = await runCli(
-      ['phrases', '--format', 'json', '--offline'],
-      MINIMAL,
-    );
+    const cwd = await stubbedFixture(MINIMAL);
+    const result = await runCli(['phrases', '--format', 'json'], cwd);
     expect(result.code).toBe(0);
   });
 });
@@ -352,18 +401,14 @@ describe('bibcheck phrases (standalone)', () => {
 
 describe('bibcheck linkage (standalone)', () => {
   it('exits 1 on known-bad (unresolved linkage is a non-zero-exit reason)', async () => {
-    const result = await runCli(
-      ['linkage', '--format', 'json', '--offline'],
-      KNOWN_BAD,
-    );
+    const cwd = await stubbedFixture(KNOWN_BAD);
+    const result = await runCli(['linkage', '--format', 'json'], cwd);
     expect(result.code).toBe(1);
   });
 
   it('exits 0 on known-good (all citekeys resolve)', async () => {
-    const result = await runCli(
-      ['linkage', '--format', 'json', '--offline'],
-      KNOWN_GOOD,
-    );
+    const cwd = await stubbedFixture(KNOWN_GOOD);
+    const result = await runCli(['linkage', '--format', 'json'], cwd);
     expect(result.code).toBe(0);
     const output = JSON.parse(result.stdout) as Record<string, unknown>;
     const linkage = output['linkage'] as Array<Record<string, unknown>>;
@@ -371,10 +416,8 @@ describe('bibcheck linkage (standalone)', () => {
   });
 
   it('exits 0 on minimal (empty bibliography, no docs with citekeys)', async () => {
-    const result = await runCli(
-      ['linkage', '--format', 'json', '--offline'],
-      MINIMAL,
-    );
+    const cwd = await stubbedFixture(MINIMAL);
+    const result = await runCli(['linkage', '--format', 'json'], cwd);
     expect(result.code).toBe(0);
   });
 });

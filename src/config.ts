@@ -50,7 +50,33 @@ const ApisSchema = z.object({
   crossref_mailto: z.string().nullable().default(null),
   openalex_mailto: z.string().nullable().default(null),
   worldcat_key_env: z.string().nullable().default(null),
+  // Base URLs for each bibliographic database. When omitted, each DB client
+  // and the doctor connectivity check fall back to the real public endpoint
+  // (see API_BASE_DEFAULTS). Overridable (e.g. to a localhost stub) for
+  // hermetic testing. Validated as URLs when present; a trailing slash is
+  // tolerated (clients strip it). Kept optional so the effective default lives
+  // in one place (API_BASE_DEFAULTS) and consumers stay tolerant of an absent
+  // value.
+  crossref_base: z.string().url().optional(),
+  openalex_base: z.string().url().optional(),
+  openlibrary_base: z.string().url().optional(),
+  // WorldCat is slated for removal in T22 (dead Classify endpoint). The base
+  // is configurable here only so integration tests can keep the ISBN route
+  // hermetic until T22 deletes the client.
+  worldcat_base: z.string().url().optional(),
 });
+
+/**
+ * Effective default base URLs for the bibliographic database APIs. These are
+ * the real public endpoints used whenever the corresponding `[apis] *_base`
+ * config field is omitted.
+ */
+export const API_BASE_DEFAULTS = {
+  crossref: 'https://api.crossref.org',
+  openalex: 'https://api.openalex.org',
+  openlibrary: 'https://openlibrary.org',
+  worldcat: 'http://classify.oclc.org',
+} as const;
 
 const CacheSchema = z.object({
   dir: z.string().default('.bibcheck-cache'),

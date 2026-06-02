@@ -29,6 +29,11 @@ import {
   LinkageReferenceSchema,
   EntrySchema,
   LinkageEntrySchema,
+  ExistenceLayerSchema,
+  ExistenceEvidenceSchema,
+  CheckDimensionSchema,
+  IdentifiersLayerSchema,
+  IdentifierStatusSchema,
 } from '../src/schema/output.js';
 
 // ---------------------------------------------------------------------------
@@ -881,8 +886,8 @@ describe('SCHEMA_VERSION', () => {
     expect(SCHEMA_VERSION).toMatch(/^0\.\d+\.\d+$/);
   });
 
-  it('is the string "0.1.0"', () => {
-    expect(SCHEMA_VERSION).toBe('0.1.0');
+  it('is the string "0.2.0"', () => {
+    expect(SCHEMA_VERSION).toBe('0.2.0');
   });
 });
 
@@ -982,5 +987,382 @@ describe('OutputSchema — populated integration test', () => {
       ],
     };
     expect(() => OutputSchema.parse(output)).not.toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 13. 0.2.0 evidence vocabulary + check-dimension enums
+// ---------------------------------------------------------------------------
+
+describe('ExistenceEvidenceSchema', () => {
+  it.each([
+    ['exists-metadata-match', true],
+    ['exists-metadata-mismatch', true],
+    ['absent', true],
+    ['unverifiable', true],
+    ['bogus', false],
+    // No numeric score is ever encoded as evidence.
+    ['0.9', false],
+  ])('value %s → valid: %s', (value, shouldAccept) => {
+    if (shouldAccept) {
+      expect(() => ExistenceEvidenceSchema.parse(value)).not.toThrow();
+    } else {
+      expect(() => ExistenceEvidenceSchema.parse(value)).toThrow();
+    }
+  });
+});
+
+describe('CheckDimensionSchema', () => {
+  it.each([
+    ['existence', true],
+    ['metadata', true],
+    ['canonical-url', true],
+    ['claim-support', true],
+    ['bogus', false],
+  ])('value %s → valid: %s', (value, shouldAccept) => {
+    if (shouldAccept) {
+      expect(() => CheckDimensionSchema.parse(value)).not.toThrow();
+    } else {
+      expect(() => CheckDimensionSchema.parse(value)).toThrow();
+    }
+  });
+});
+
+describe('IdentifierStatusSchema', () => {
+  it.each([
+    ['ok', true],
+    ['malformed', true],
+    ['bad-checksum', true],
+    ['not-applicable', true],
+    ['bogus', false],
+  ])('value %s → valid: %s', (value, shouldAccept) => {
+    if (shouldAccept) {
+      expect(() => IdentifierStatusSchema.parse(value)).not.toThrow();
+    } else {
+      expect(() => IdentifierStatusSchema.parse(value)).toThrow();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 14. IdentifiersLayerSchema (Layer 0)
+// ---------------------------------------------------------------------------
+
+describe('IdentifiersLayerSchema', () => {
+  it('accepts a fully ok layer', () => {
+    expect(() =>
+      IdentifiersLayerSchema.parse({ doi: 'ok', isbn: 'ok', url: 'ok' })
+    ).not.toThrow();
+  });
+
+  it('accepts a layer with isbn: bad-checksum', () => {
+    expect(() =>
+      IdentifiersLayerSchema.parse({
+        doi: 'ok',
+        isbn: 'bad-checksum',
+        url: 'not-applicable',
+      })
+    ).not.toThrow();
+  });
+
+  it('accepts a layer with malformed doi and url', () => {
+    expect(() =>
+      IdentifiersLayerSchema.parse({
+        doi: 'malformed',
+        isbn: 'not-applicable',
+        url: 'malformed',
+      })
+    ).not.toThrow();
+  });
+
+  it('rejects a layer with a bogus per-identifier status', () => {
+    expect(() =>
+      IdentifiersLayerSchema.parse({ doi: 'ok', isbn: 'nope', url: 'ok' })
+    ).toThrow();
+  });
+
+  it('rejects a layer missing a required identifier field', () => {
+    expect(() =>
+      IdentifiersLayerSchema.parse({ doi: 'ok', isbn: 'ok' })
+    ).toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 15. ExistenceLayerSchema 0.2.0 verification-boundary fields
+// ---------------------------------------------------------------------------
+
+describe('ExistenceLayerSchema — 0.2.0 fields', () => {
+  it('accepts a layer carrying evidence/checkedFor/notCheckedFor/error', () => {
+    expect(() =>
+      ExistenceLayerSchema.parse({
+        status: 'verified',
+        evidence: 'exists-metadata-match',
+        checkedFor: ['existence', 'metadata'],
+        notCheckedFor: ['claim-support'],
+        checks: [{ source: 'crossref', result: 'found', evidence: null }],
+        error: null,
+      })
+    ).not.toThrow();
+  });
+
+  it('accepts a back-compat layer with only status + checks (pre-T22 producer)', () => {
+    expect(() =>
+      ExistenceLayerSchema.parse({
+        status: 'unverifiable',
+        checks: [{ source: 'crossref', result: 'no-doi', evidence: null }],
+      })
+    ).not.toThrow();
+  });
+
+  it('accepts an error string on a crashed layer', () => {
+    expect(() =>
+      ExistenceLayerSchema.parse({
+        status: 'unverifiable',
+        checks: [],
+        error: 'network unreachable',
+      })
+    ).not.toThrow();
+  });
+
+  it('rejects an unknown evidence value', () => {
+    expect(() =>
+      ExistenceLayerSchema.parse({
+        status: 'verified',
+        evidence: 'definitely-real',
+        checks: [],
+      })
+    ).toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 16. Summary 0.2.0 counters: numeric boundaries (optional fields)
+// ---------------------------------------------------------------------------
+
+describe('SummarySchema — 0.2.0 counters', () => {
+  const newFields = ['notFoundInDatabases', 'malformedIdentifiers'] as const;
+
+  it.each(newFields)('field %s: accepts omission (optional)', (field) => {
+    // BASE_SUMMARY already omits both new counters; assert each is genuinely
+    // optional by parsing a summary that lacks it.
+    const summary: Record<string, number> = { ...BASE_SUMMARY };
+    delete summary[field];
+    expect(() => SummarySchema.parse(summary)).not.toThrow();
+  });
+
+  it.each(newFields)('field %s: rejects -1', (field) => {
+    expect(() => SummarySchema.parse({ ...BASE_SUMMARY, [field]: -1 })).toThrow();
+  });
+
+  it.each(newFields)('field %s: rejects 1.5', (field) => {
+    expect(() => SummarySchema.parse({ ...BASE_SUMMARY, [field]: 1.5 })).toThrow();
+  });
+
+  it.each(newFields)('field %s: accepts 0', (field) => {
+    expect(() => SummarySchema.parse({ ...BASE_SUMMARY, [field]: 0 })).not.toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 17. 0.2.0 existence-bucket reconciliation invariant (superRefine)
+// ---------------------------------------------------------------------------
+
+describe('OutputSchema — 0.2.0 existence-bucket reconciliation', () => {
+  it('accepts a back-compat doc WITHOUT the new counters (invariant dormant)', () => {
+    // BASE_SUMMARY carries neither notFoundInDatabases nor malformedIdentifiers.
+    expect(() => OutputSchema.parse(makeOutput())).not.toThrow();
+  });
+
+  it('accepts a doc whose existence buckets sum to totalEntries', () => {
+    expect(() =>
+      OutputSchema.parse(
+        makeOutput({
+          summary: {
+            ...BASE_SUMMARY,
+            totalEntries: 4,
+            verified: 1,
+            metadataMismatches: 1,
+            notFoundInDatabases: 1,
+            malformedIdentifiers: 0,
+            unverifiable: 1,
+          },
+        })
+      )
+    ).not.toThrow();
+  });
+
+  it('rejects a doc whose existence buckets do NOT sum to totalEntries', () => {
+    expect(() =>
+      OutputSchema.parse(
+        makeOutput({
+          summary: {
+            ...BASE_SUMMARY,
+            totalEntries: 4,
+            verified: 1,
+            metadataMismatches: 1,
+            notFoundInDatabases: 1,
+            unverifiable: 0, // sum = 3, not 4
+          },
+        })
+      )
+    ).toThrow();
+  });
+
+  it('rejects when notFoundInDatabases exceeds totalEntries', () => {
+    expect(() =>
+      OutputSchema.parse(
+        makeOutput({
+          summary: { ...BASE_SUMMARY, totalEntries: 0, notFoundInDatabases: 1 },
+        })
+      )
+    ).toThrow();
+  });
+
+  it('rejects when malformedIdentifiers exceeds totalEntries', () => {
+    // totalEntries 1 keeps the bucket sum valid (verified 1) so only the
+    // malformedIdentifiers > totalEntries rule can fire.
+    expect(() =>
+      OutputSchema.parse(
+        makeOutput({
+          summary: {
+            ...BASE_SUMMARY,
+            totalEntries: 1,
+            verified: 1,
+            notFoundInDatabases: 0,
+            malformedIdentifiers: 2,
+          },
+        })
+      )
+    ).toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 18. Full 0.2.0 document round-trip (new fields populated)
+// ---------------------------------------------------------------------------
+
+describe('OutputSchema — 0.2.0 populated round-trip', () => {
+  it('round-trips a document exercising every new 0.2.0 field', () => {
+    const output: Output = {
+      schemaVersion: SCHEMA_VERSION,
+      tool: { name: 'bibcheck', version: '0.2.0' },
+      summary: {
+        totalEntries: 2,
+        verified: 1,
+        metadataMismatches: 0,
+        notFoundInDatabases: 1,
+        malformedIdentifiers: 1,
+        unverifiable: 0,
+        canonicalIssues: 0,
+        linkageFailures: 1,
+        phraseFlags: 0,
+        worklistItems: 1,
+      },
+      entries: [
+        {
+          citekey: 'mill1859onliberty',
+          identifiers: { doi: 'not-applicable', isbn: 'ok', url: 'ok' },
+          existence: {
+            status: 'verified',
+            evidence: 'exists-metadata-match',
+            checkedFor: ['existence', 'metadata'],
+            notCheckedFor: ['claim-support'],
+            checks: [
+              { source: 'openlibrary', result: 'found', evidence: { olid: 'OL7353613M' } },
+            ],
+            error: null,
+          },
+          canonical: {
+            status: 'verified-canonical',
+            url: 'https://archive.org/details/onliberty00millgoog',
+          },
+        },
+        {
+          citekey: 'fabricated2099nonexistent',
+          identifiers: { doi: 'bad-checksum', isbn: 'bad-checksum', url: 'malformed' },
+          existence: {
+            status: 'not-found-in-databases',
+            evidence: 'absent',
+            checkedFor: ['existence'],
+            notCheckedFor: ['metadata', 'claim-support'],
+            checks: [
+              { source: 'crossref', result: 'not-found', evidence: null },
+              { source: 'openalex', result: 'not-found', evidence: null },
+            ],
+            error: null,
+          },
+          canonical: { status: 'not-applicable', url: null },
+        },
+      ],
+      linkage: [
+        {
+          citekey: 'mill1859onliberty',
+          status: 'resolved',
+          references: [
+            { file: 'docs/ch1.md', line: 42, locator: 'p. 22', authorSuppressed: false },
+          ],
+        },
+        {
+          citekey: 'fabricated2099nonexistent',
+          status: 'unresolved',
+          references: [
+            { file: 'docs/ch2.md', line: 7, locator: 'pp. 33-35', authorSuppressed: true },
+          ],
+        },
+      ],
+      phraseFlags: [],
+      worklist: [
+        {
+          type: 'direct-quotation',
+          file: 'docs/ch1.md',
+          line: 42,
+          citation: '@mill1859onliberty',
+          snippet: 'The only purpose for which power can be rightfully exercised...',
+          verificationUrl: 'https://archive.org/details/onliberty00millgoog',
+          recommendedAction: 'Verify the quoted passage verbatim, page 22.',
+          locator: 'p. 22',
+        },
+      ],
+    };
+    expect(() => OutputSchema.parse(output)).not.toThrow();
+    const parsed = OutputSchema.parse(output);
+    expect(parsed.entries[0]?.identifiers?.isbn).toBe('ok');
+    expect(parsed.entries[1]?.existence?.evidence).toBe('absent');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 19. Locator / authorSuppressed optionality (back-compat)
+// ---------------------------------------------------------------------------
+
+describe('LinkageReferenceSchema — 0.2.0 locator/authorSuppressed', () => {
+  it('accepts a reference WITHOUT locator/authorSuppressed (back-compat)', () => {
+    expect(() =>
+      LinkageReferenceSchema.parse({ file: 'a.md', line: 1 })
+    ).not.toThrow();
+  });
+
+  it('accepts a reference WITH locator and authorSuppressed', () => {
+    expect(() =>
+      LinkageReferenceSchema.parse({
+        file: 'a.md',
+        line: 1,
+        locator: 'pp. 33-35',
+        authorSuppressed: true,
+      })
+    ).not.toThrow();
+  });
+
+  it('accepts a null locator', () => {
+    expect(() =>
+      LinkageReferenceSchema.parse({ file: 'a.md', line: 1, locator: null })
+    ).not.toThrow();
+  });
+
+  it('rejects a non-boolean authorSuppressed', () => {
+    expect(() =>
+      LinkageReferenceSchema.parse({ file: 'a.md', line: 1, authorSuppressed: 'yes' })
+    ).toThrow();
   });
 });

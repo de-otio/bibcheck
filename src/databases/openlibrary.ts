@@ -12,6 +12,7 @@
 import type { HttpClient, HttpResponse } from '../http.js';
 import type { Cache } from '../cache/fs-cache.js';
 import type { DatabaseLookupResult, DatabaseClient } from './crossref.js';
+import { trimTrailingSlash } from './crossref.js';
 
 export type { DatabaseLookupResult, DatabaseClient };
 
@@ -22,7 +23,11 @@ export type { DatabaseLookupResult, DatabaseClient };
 export interface OpenLibraryClientOptions {
   http: HttpClient;
   cache: Cache;
+  /** Base URL for the OpenLibrary API. Defaults to the public endpoint. */
+  baseUrl?: string;
 }
+
+const DEFAULT_OPENLIBRARY_BASE = 'https://openlibrary.org';
 
 export interface OpenLibraryClient extends DatabaseClient {
   readonly name: 'openlibrary';
@@ -91,6 +96,7 @@ function mapBookMetadata(book: OpenLibraryBookData, isbn: string): DatabaseLooku
 
 export function createOpenLibraryClient(opts: OpenLibraryClientOptions): OpenLibraryClient {
   const { http, cache } = opts;
+  const base = trimTrailingSlash(opts.baseUrl ?? DEFAULT_OPENLIBRARY_BASE);
 
   async function lookupByIsbn(isbn: string, signal?: AbortSignal): Promise<DatabaseLookupResult> {
     const cacheKey = `openlibrary:lookupByIsbn:${isbn}`;
@@ -100,7 +106,7 @@ export function createOpenLibraryClient(opts: OpenLibraryClientOptions): OpenLib
       return cached;
     }
 
-    const url = `https://openlibrary.org/api/books?bibkeys=ISBN:${encodeURIComponent(isbn)}&format=json&jscmd=data`;
+    const url = `${base}/api/books?bibkeys=ISBN:${encodeURIComponent(isbn)}&format=json&jscmd=data`;
 
     let response: HttpResponse;
     response = await http.get(url, { signal });

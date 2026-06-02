@@ -13,6 +13,7 @@
  */
 
 import type { Config } from './config.js';
+import { API_BASE_DEFAULTS } from './config.js';
 import type { HttpClient } from './http.js';
 import { resolve, join } from 'node:path';
 import { rm } from 'node:fs/promises';
@@ -56,6 +57,11 @@ export interface RunDoctorResult {
 
 /** Minimum supported Node major version. */
 const MIN_NODE_MAJOR = 20;
+
+/** Remove a single trailing slash so connectivity URLs join cleanly. */
+function trimTrailingSlash(url: string): string {
+  return url.endsWith('/') ? url.slice(0, -1) : url;
+}
 
 /** Regex for basic hostname validation. */
 const HOSTNAME_RE = /^[a-z0-9.-]+\.[a-z]{2,}$/;
@@ -390,7 +396,7 @@ export async function runDoctor(deps: RunDoctorDeps): Promise<RunDoctorResult> {
   checks.push(
     await checkApiConnectivity(
       'crossref-connectivity',
-      'https://api.crossref.org/works/10.1000/xyz123',
+      `${trimTrailingSlash(config.apis.crossref_base ?? API_BASE_DEFAULTS.crossref)}/works/10.1000/xyz123`,
       http,
       signal,
     ),
@@ -405,7 +411,7 @@ export async function runDoctor(deps: RunDoctorDeps): Promise<RunDoctorResult> {
   checks.push(
     await checkApiConnectivity(
       'openalex-connectivity',
-      'https://api.openalex.org/',
+      `${trimTrailingSlash(config.apis.openalex_base ?? API_BASE_DEFAULTS.openalex)}/`,
       http,
       signal,
     ),
@@ -420,7 +426,7 @@ export async function runDoctor(deps: RunDoctorDeps): Promise<RunDoctorResult> {
   checks.push(
     await checkApiConnectivity(
       'openlibrary-connectivity',
-      'https://openlibrary.org/api/books',
+      `${trimTrailingSlash(config.apis.openlibrary_base ?? API_BASE_DEFAULTS.openlibrary)}/api/books`,
       http,
       signal,
     ),
@@ -435,7 +441,7 @@ export async function runDoctor(deps: RunDoctorDeps): Promise<RunDoctorResult> {
   checks.push(
     await checkApiConnectivity(
       'worldcat-connectivity',
-      'http://classify.oclc.org/classify2/api',
+      `${trimTrailingSlash(config.apis.worldcat_base ?? API_BASE_DEFAULTS.worldcat)}/classify2/api`,
       http,
       signal,
     ),

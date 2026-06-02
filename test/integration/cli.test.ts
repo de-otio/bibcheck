@@ -85,8 +85,30 @@ describe('--help', () => {
     const result = await runCli(['check', '--help']);
     expect(result.code).toBe(0);
     expect(result.stdout).toContain('--format');
-    expect(result.stdout).toContain('--offline');
     expect(result.stdout).toContain('--config');
+  });
+
+  it('check --help no longer advertises --offline', async () => {
+    const result = await runCli(['check', '--help']);
+    expect(result.stdout).not.toContain('--offline');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// --offline removed (decision Q3): now an unknown option
+// ---------------------------------------------------------------------------
+
+describe('--offline is removed', () => {
+  it('check --offline errors as an unknown option', async () => {
+    const result = await runCli(['check', '--offline', '--cwd', MINIMAL]);
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toMatch(/unknown option.*--offline/i);
+  });
+
+  it('doctor --offline errors as an unknown option', async () => {
+    const result = await runCli(['doctor', '--offline', '--cwd', MINIMAL]);
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toMatch(/unknown option.*--offline/i);
   });
 });
 

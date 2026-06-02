@@ -43,6 +43,15 @@ export interface CrossRefClientOptions {
   http: HttpClient;
   cache: Cache;
   mailto?: string | null; // polite-pool email
+  /** Base URL for the CrossRef API. Defaults to the public endpoint. */
+  baseUrl?: string;
+}
+
+const DEFAULT_CROSSREF_BASE = 'https://api.crossref.org';
+
+/** Remove a single trailing slash so path joins are unambiguous. */
+export function trimTrailingSlash(url: string): string {
+  return url.endsWith('/') ? url.slice(0, -1) : url;
 }
 
 export interface CrossRefClient extends DatabaseClient {
@@ -162,6 +171,7 @@ function mapMetadata(msg: CrossRefMessage): DatabaseLookupResult['metadata'] {
 
 export function createCrossRefClient(opts: CrossRefClientOptions): CrossRefClient {
   const { http, cache, mailto } = opts;
+  const base = trimTrailingSlash(opts.baseUrl ?? DEFAULT_CROSSREF_BASE);
 
   async function lookupByDoi(doi: string, signal?: AbortSignal): Promise<DatabaseLookupResult> {
     const cacheKey = `crossref:lookupByDoi:${doi.toLowerCase()}`;
@@ -172,7 +182,7 @@ export function createCrossRefClient(opts: CrossRefClientOptions): CrossRefClien
     }
 
     const encoded = encodeURIComponent(doi);
-    let url = `https://api.crossref.org/works/${encoded}`;
+    let url = `${base}/works/${encoded}`;
     if (mailto) {
       url += `?mailto=${encodeURIComponent(mailto)}`;
     }
