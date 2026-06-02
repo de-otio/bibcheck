@@ -17,12 +17,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # Node 24 (NOT 22) — npm Trusted Publishing requires npm >= 11.5.1,
       # which ships with Node 24+. Node 22 ships npm 10 and fails publish
       # with a misleading 404 PUT after provenance signing. (Gotcha #1.)
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 24
           # registry-url is REQUIRED here; without it npm publish fails
