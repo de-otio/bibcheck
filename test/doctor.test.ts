@@ -137,7 +137,6 @@ describe('runDoctor — all checks pass', () => {
     expect(getCheck(result.checks, 'crossref-connectivity')?.status).toBe('ok');
     expect(getCheck(result.checks, 'openalex-connectivity')?.status).toBe('ok');
     expect(getCheck(result.checks, 'openlibrary-connectivity')?.status).toBe('ok');
-    expect(getCheck(result.checks, 'worldcat-connectivity')?.status).toBe('ok');
     expect(getCheck(result.checks, 'trusted-hosts')?.status).toBe('ok');
 
     // Bibliography parses check should include entry count.

@@ -1,0 +1,19 @@
+[
+  {
+    "id": "fakeDoi2099nonexistent",
+    "type": "article-journal",
+    "title": "A Work With a Fabricated DOI",
+    "author": [{ "family": "Ghost", "given": "Author" }],
+    "issued": { "date-parts": [[2099]] },
+    "container-title": "Journal of Nonexistent Studies",
+    "DOI": "10.99999/nonexistent-fabricated-doi"
+  },
+  {
+    "id": "badChecksumIsbn",
+    "type": "book",
+    "title": "A Book With a Bad-Checksum ISBN",
+    "author": [{ "family": "Transposed", "given": "Digits" }],
+    "issued": { "date-parts": [[2000]] },
+    "ISBN": "978-0-14-043207-9"
+  }
+]

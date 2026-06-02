@@ -50,7 +50,6 @@ function makeConfig(include: string[] = ['docs/**/*.md'], exclude: string[] = []
     apis: {
       crossref_mailto: null,
       openalex_mailto: null,
-      worldcat_key_env: null,
     },
     cache: { dir: '.bibcheck-cache', max_size_mb: 256 },
   };

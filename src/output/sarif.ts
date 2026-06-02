@@ -51,9 +51,19 @@ const STATIC_RULES: RuleDef[] = [
     anchor: 'existence-metadata-mismatch',
   },
   {
+    id: 'bibcheck/existence/not-found-in-databases',
+    shortDescription: 'The entry was not found in any applicable bibliographic database (a fabrication signal).',
+    anchor: 'existence-not-found-in-databases',
+  },
+  {
     id: 'bibcheck/existence/unverifiable',
     shortDescription: 'Existence of the entry could not be verified in any database.',
     anchor: 'existence-unverifiable',
+  },
+  {
+    id: 'bibcheck/identifiers/malformed',
+    shortDescription: 'A DOI/ISBN/URL identifier is malformed or has a bad checksum (a fabrication signal).',
+    anchor: 'identifiers-malformed',
   },
   {
     id: 'bibcheck/canonical/dead-url',
@@ -156,7 +166,38 @@ function addExistenceResults(output: Output, sarifRunBuilder: SarifRunBuilder): 
         messageText: `Existence metadata mismatch for @${entry.citekey}: database records do not match the bibliography entry.`,
         fileUri: 'sources.json',
       });
+    } else if (existence.status === 'not-found-in-databases') {
+      // Absence is a fabrication signal and gates by default (Q1).
+      addResult(sarifRunBuilder, {
+        ruleId: 'bibcheck/existence/not-found-in-databases',
+        level: 'error',
+        messageText: `@${entry.citekey} was not found in any applicable bibliographic database.`,
+        fileUri: 'sources.json',
+      });
     }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Identifier findings (T21/T22): malformed/bad-checksum local identifiers
+// ---------------------------------------------------------------------------
+
+function addIdentifierResults(output: Output, sarifRunBuilder: SarifRunBuilder): void {
+  for (const entry of output.entries) {
+    const ids = entry.identifiers;
+    if (ids == null) continue;
+    const problems: string[] = [];
+    if (ids.doi === 'malformed') problems.push('DOI malformed');
+    if (ids.isbn === 'malformed') problems.push('ISBN malformed');
+    if (ids.isbn === 'bad-checksum') problems.push('ISBN bad checksum');
+    if (ids.url === 'malformed') problems.push('URL malformed');
+    if (problems.length === 0) continue;
+    addResult(sarifRunBuilder, {
+      ruleId: 'bibcheck/identifiers/malformed',
+      level: 'error',
+      messageText: `Malformed identifier for @${entry.citekey}: ${problems.join(', ')}.`,
+      fileUri: 'sources.json',
+    });
   }
 }
 
@@ -297,6 +338,7 @@ export function renderSarif(output: Output): string {
   }
 
   // Add findings.
+  addIdentifierResults(output, sarifRunBuilder);
   addExistenceResults(output, sarifRunBuilder);
   addCanonicalResults(output, sarifRunBuilder);
   addLinkageResults(output, sarifRunBuilder);

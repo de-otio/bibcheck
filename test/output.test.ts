@@ -23,6 +23,8 @@ const BASE_SUMMARY: Output['summary'] = {
   totalEntries: 0,
   verified: 0,
   metadataMismatches: 0,
+  notFoundInDatabases: 0,
+  malformedIdentifiers: 0,
   unverifiable: 0,
   canonicalIssues: 0,
   linkageFailures: 0,
@@ -50,6 +52,8 @@ function makePopulatedOutput(): Output {
       totalEntries: 3,
       verified: 1,
       metadataMismatches: 1,
+      notFoundInDatabases: 0,
+      malformedIdentifiers: 0,
       unverifiable: 1,
       canonicalIssues: 2,
       linkageFailures: 1,
@@ -59,9 +63,14 @@ function makePopulatedOutput(): Output {
     entries: [
       {
         citekey: 'mill1859onliberty',
+        identifiers: { doi: 'not-applicable', isbn: 'ok', url: 'not-applicable' },
         existence: {
           status: 'verified',
+          evidence: 'exists-metadata-match',
+          checkedFor: ['existence', 'metadata'],
+          notCheckedFor: ['canonical-url', 'claim-support'],
           checks: [{ source: 'openlibrary', result: 'found', evidence: null }],
+          error: null,
         },
         canonical: {
           status: 'verified-canonical',
@@ -70,9 +79,14 @@ function makePopulatedOutput(): Output {
       },
       {
         citekey: 'habermas1962strukturwandel',
+        identifiers: { doi: 'ok', isbn: 'not-applicable', url: 'not-applicable' },
         existence: {
           status: 'metadata-mismatch',
+          evidence: 'exists-metadata-mismatch',
+          checkedFor: ['existence', 'metadata'],
+          notCheckedFor: ['canonical-url', 'claim-support'],
           checks: [{ source: 'crossref', result: 'metadata-mismatch', evidence: null }],
+          error: null,
         },
         canonical: {
           status: 'dead-url',
@@ -81,9 +95,14 @@ function makePopulatedOutput(): Output {
       },
       {
         citekey: 'kant1781kritik',
+        identifiers: { doi: 'not-applicable', isbn: 'not-applicable', url: 'not-applicable' },
         existence: {
           status: 'unverifiable',
+          evidence: 'unverifiable',
+          checkedFor: [],
+          notCheckedFor: ['existence', 'metadata', 'canonical-url', 'claim-support'],
           checks: [{ source: 'crossref', result: 'no-doi', evidence: null }],
+          error: null,
         },
         canonical: {
           status: 'wrong-host',
@@ -135,6 +154,75 @@ function makePopulatedOutput(): Output {
         recommendedAction: 'Verify verbatim against named edition.',
       },
     ],
+  });
+}
+
+/**
+ * Output exercising the 0.2.0 gating-finding renderer branches:
+ * a not-found-in-databases existence entry and entries with each
+ * identifier-problem variant (malformed DOI, malformed ISBN, bad-checksum
+ * ISBN, malformed URL).
+ */
+function makeGatingOutput(): Output {
+  return OutputSchema.parse({
+    schemaVersion: SCHEMA_VERSION,
+    tool: { name: 'bibcheck', version: '0.0.0' },
+    summary: {
+      totalEntries: 3,
+      verified: 0,
+      metadataMismatches: 0,
+      notFoundInDatabases: 1,
+      malformedIdentifiers: 3,
+      unverifiable: 2,
+      canonicalIssues: 0,
+      linkageFailures: 0,
+      phraseFlags: 0,
+      worklistItems: 0,
+    },
+    entries: [
+      {
+        citekey: 'fabricated2099',
+        identifiers: { doi: 'ok', isbn: 'not-applicable', url: 'not-applicable' },
+        existence: {
+          status: 'not-found-in-databases',
+          evidence: 'absent',
+          checkedFor: ['existence'],
+          notCheckedFor: ['metadata', 'canonical-url', 'claim-support'],
+          checks: [{ source: 'crossref', result: 'not-found', evidence: null }],
+          error: null,
+        },
+        canonical: { status: 'not-applicable', url: null },
+      },
+      {
+        citekey: 'baddoi',
+        identifiers: { doi: 'malformed', isbn: 'bad-checksum', url: 'malformed' },
+        existence: {
+          status: 'unverifiable',
+          evidence: 'unverifiable',
+          checkedFor: [],
+          notCheckedFor: ['existence', 'metadata', 'canonical-url', 'claim-support'],
+          checks: [{ source: 'crossref', result: 'error', evidence: { error: 'skipped' } }],
+          error: 'Identifier validation failed; existence lookup skipped.',
+        },
+        canonical: { status: 'not-applicable', url: null },
+      },
+      {
+        citekey: 'badisbnshape',
+        identifiers: { doi: 'not-applicable', isbn: 'malformed', url: 'not-applicable' },
+        existence: {
+          status: 'unverifiable',
+          evidence: 'unverifiable',
+          checkedFor: [],
+          notCheckedFor: ['existence', 'metadata', 'canonical-url', 'claim-support'],
+          checks: [{ source: 'crossref', result: 'error', evidence: { error: 'skipped' } }],
+          error: 'Identifier validation failed; existence lookup skipped.',
+        },
+        canonical: { status: 'not-applicable', url: null },
+      },
+    ],
+    linkage: [],
+    phraseFlags: [],
+    worklist: [],
   });
 }
 
@@ -700,5 +788,64 @@ describe('renderSarif', () => {
     expect(ruleIds).toContain('bibcheck/existence/metadata-mismatch');
     // Dynamic rule from phrase flag.
     expect(ruleIds).toContain('bibcheck/phrase/deprecated-term');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 0.2.0 gating findings across all renderers (not-found-in-databases +
+// malformed/bad-checksum identifiers). These exercise the renderer branches
+// added in T22.
+// ---------------------------------------------------------------------------
+
+describe('renderers — 0.2.0 gating findings', () => {
+  it('text: not-found-in-databases is an error finding', () => {
+    const text = renderText(makeGatingOutput());
+    const line = text.split('\n').find((l) => l.includes('not-found-in-databases'));
+    expect(line).toBeDefined();
+    expect(line).toContain(': error:');
+    expect(line).toContain('@fabricated2099');
+  });
+
+  it('text: malformed/bad-checksum identifiers are error findings naming each problem', () => {
+    const text = renderText(makeGatingOutput());
+    const doiLine = text.split('\n').find((l) => l.includes('@baddoi'));
+    expect(doiLine).toBeDefined();
+    expect(doiLine).toContain(': error:');
+    expect(doiLine).toContain('doi malformed');
+    expect(doiLine).toContain('isbn bad-checksum');
+    expect(doiLine).toContain('url malformed');
+    const shapeLine = text.split('\n').find((l) => l.includes('@badisbnshape'));
+    expect(shapeLine).toContain('isbn malformed');
+  });
+
+  it('markdown: summary table reports the new counters and the evidence column', () => {
+    const md = renderMarkdown(makeGatingOutput());
+    expect(md).toContain('| Not found in databases | 1 |');
+    expect(md).toContain('| Malformed identifiers | 3 |');
+    expect(md).toContain('| Citekey | Existence status | Evidence | Canonical status | Canonical URL |');
+    expect(md).toContain('absent');
+  });
+
+  it('sarif: emits not-found-in-databases and malformed-identifier results (error level)', () => {
+    const doc = JSON.parse(renderSarif(makeGatingOutput())) as Record<string, unknown>;
+    const runs = doc['runs'] as Array<Record<string, unknown>>;
+    const results = runs[0]?.['results'] as Array<Record<string, unknown>>;
+    const notFound = results.find((r) => r['ruleId'] === 'bibcheck/existence/not-found-in-databases');
+    expect(notFound).toBeDefined();
+    expect(notFound?.['level']).toBe('error');
+    const malformed = results.filter((r) => r['ruleId'] === 'bibcheck/identifiers/malformed');
+    expect(malformed.length).toBe(2);
+    expect(malformed[0]?.['level']).toBe('error');
+    // The corresponding rules are registered on the driver.
+    const driver = (runs[0]?.['tool'] as Record<string, unknown>)?.['driver'] as Record<string, unknown>;
+    const ruleIds = (driver?.['rules'] as Array<Record<string, unknown>>).map((r) => r['id']);
+    expect(ruleIds).toContain('bibcheck/existence/not-found-in-databases');
+    expect(ruleIds).toContain('bibcheck/identifiers/malformed');
+  });
+
+  it('json: round-trips the gating output', () => {
+    const original = makeGatingOutput();
+    const parsed = OutputSchema.parse(JSON.parse(renderJson(original)));
+    expect(parsed).toEqual(original);
   });
 });

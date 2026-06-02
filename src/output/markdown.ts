@@ -40,6 +40,8 @@ function renderSummaryTable(output: Output): string {
     `| Total entries | ${summary.totalEntries} |`,
     `| Verified | ${summary.verified} |`,
     `| Metadata mismatches | ${summary.metadataMismatches} |`,
+    `| Not found in databases | ${summary.notFoundInDatabases} |`,
+    `| Malformed identifiers | ${summary.malformedIdentifiers} |`,
     `| Unverifiable | ${summary.unverifiable} |`,
     `| Canonical issues | ${summary.canonicalIssues} |`,
     `| Linkage failures | ${summary.linkageFailures} |`,
@@ -61,15 +63,16 @@ function renderEntriesTable(entries: Entry[]): string {
   // Sort alphabetically by citekey.
   const sorted = [...entries].sort((a, b) => a.citekey.localeCompare(b.citekey));
 
-  lines.push('| Citekey | Existence status | Canonical status | Canonical URL |');
-  lines.push('|---------|-----------------|-----------------|---------------|');
+  lines.push('| Citekey | Existence status | Evidence | Canonical status | Canonical URL |');
+  lines.push('|---------|-----------------|----------|-----------------|---------------|');
 
   for (const entry of sorted) {
     const existStatus = entry.existence?.status ?? 'not run';
+    const evidence = entry.existence?.evidence ?? '—';
     const canonStatus = entry.canonical?.status ?? 'not run';
     const canonUrl = entry.canonical?.url != null ? `[link](${entry.canonical.url})` : '—';
     lines.push(
-      `| ${escCell(entry.citekey)} | ${escCell(existStatus)} | ${escCell(canonStatus)} | ${canonUrl} |`
+      `| ${escCell(entry.citekey)} | ${escCell(existStatus)} | ${escCell(evidence)} | ${escCell(canonStatus)} | ${canonUrl} |`
     );
   }
   lines.push('');

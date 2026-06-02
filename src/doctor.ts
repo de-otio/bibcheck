@@ -433,22 +433,7 @@ export async function runDoctor(deps: RunDoctorDeps): Promise<RunDoctorResult> {
   );
 
   // -------------------------------------------------------------------------
-  // Check 11: WorldCat API connectivity (keyless Classify endpoint)
-  // -------------------------------------------------------------------------
-
-  if (signal.aborted) throw signal.reason as Error;
-
-  checks.push(
-    await checkApiConnectivity(
-      'worldcat-connectivity',
-      `${trimTrailingSlash(config.apis.worldcat_base ?? API_BASE_DEFAULTS.worldcat)}/classify2/api`,
-      http,
-      signal,
-    ),
-  );
-
-  // -------------------------------------------------------------------------
-  // Check 12: Trusted host whitelist sanity
+  // Check 11: Trusted host whitelist sanity
   // -------------------------------------------------------------------------
 
   {

@@ -45,6 +45,14 @@ function collectExistenceFindings(output: Output): Finding[] {
         level: 'error',
         message: `existence metadata-mismatch for @${entry.citekey}`,
       });
+    } else if (entry.existence?.status === 'not-found-in-databases') {
+      // Absence is a fabrication signal and gates by default (Q1).
+      findings.push({
+        file: 'sources.json',
+        line: 0,
+        level: 'error',
+        message: `existence not-found-in-databases for @${entry.citekey}`,
+      });
     } else if (entry.existence?.status === 'unverifiable') {
       findings.push({
         file: 'sources.json',
@@ -53,6 +61,28 @@ function collectExistenceFindings(output: Output): Finding[] {
         message: `existence unverifiable for @${entry.citekey}`,
       });
     }
+  }
+  return findings;
+}
+
+/** Malformed/bad-checksum local identifiers (T21/T22). Gating → error level. */
+function collectIdentifierFindings(output: Output): Finding[] {
+  const findings: Finding[] = [];
+  for (const entry of output.entries) {
+    const ids = entry.identifiers;
+    if (ids === null || ids === undefined) continue;
+    const problems: string[] = [];
+    if (ids.doi === 'malformed') problems.push('doi malformed');
+    if (ids.isbn === 'malformed') problems.push('isbn malformed');
+    if (ids.isbn === 'bad-checksum') problems.push('isbn bad-checksum');
+    if (ids.url === 'malformed') problems.push('url malformed');
+    if (problems.length === 0) continue;
+    findings.push({
+      file: 'sources.json',
+      line: 0,
+      level: 'error',
+      message: `identifier ${problems.join(', ')} for @${entry.citekey}`,
+    });
   }
   return findings;
 }
@@ -145,6 +175,7 @@ function collectWorklistFindings(output: Output): Finding[] {
  */
 export function renderText(output: Output): string {
   const allFindings: Finding[] = [
+    ...collectIdentifierFindings(output),
     ...collectExistenceFindings(output),
     ...collectCanonicalFindings(output),
     ...collectLinkageFindings(output),

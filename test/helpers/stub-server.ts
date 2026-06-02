@@ -111,15 +111,6 @@ export const defaultRouter: StubRouter = (pathname, fullUrl) => {
     return { body: { results: [openalexWork()] } };
   }
 
-  // WorldCat (OCLC Classify): /classify2/api?isbn=<isbn>. Found, but with no
-  // title/author so the fuzzy metadata comparison short-circuits to a match.
-  if (pathname === '/classify2/api') {
-    if (looksFabricated) {
-      return { body: { classify: {} } };
-    }
-    return { body: { classify: { work: {} } } };
-  }
-
   // OpenLibrary: /api/books?bibkeys=ISBN:<isbn>. Found, but with no
   // title/author (see crossrefWork docstring) so existence does not gate.
   if (pathname === '/api/books') {
@@ -249,8 +240,6 @@ export async function writeStubConfig(opts: WriteStubConfigOptions): Promise<str
     `crossref_base = "${opts.baseUrl}"`,
     `openalex_base = "${opts.baseUrl}"`,
     `openlibrary_base = "${opts.baseUrl}"`,
-    // WorldCat too, so the ISBN route stays hermetic until T22 removes it.
-    `worldcat_base = "${opts.baseUrl}"`,
   ].join('\n');
 
   const trimmed = withoutApis.trimEnd();

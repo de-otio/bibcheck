@@ -1,5 +1,7 @@
 /**
- * Barrel re-export for all four bibliographic database clients.
+ * Barrel re-export for the bibliographic database clients (CrossRef,
+ * OpenAlex, OpenLibrary). WorldCat / OCLC Classify was removed in 0.2.0
+ * (decommissioned endpoint; see tmp/design-review/worldcat.md).
  */
 
 export {
@@ -19,6 +21,3 @@ export type { OpenAlexClientOptions, OpenAlexClient } from './openalex.js';
 
 export { createOpenLibraryClient } from './openlibrary.js';
 export type { OpenLibraryClientOptions, OpenLibraryClient } from './openlibrary.js';
-
-export { createWorldCatClient } from './worldcat.js';
-export type { WorldCatClientOptions, WorldCatClient } from './worldcat.js';

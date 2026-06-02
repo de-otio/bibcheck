@@ -148,10 +148,6 @@ async function runCheckCommand(
     throw err;
   }
 
-  const worldcatApiKey = config.apis.worldcat_key_env != null
-    ? (process.env[config.apis.worldcat_key_env] ?? null)
-    : null;
-
   const userAgent = config.apis.crossref_mailto != null
     ? `bibcheck/0.0.0 (mailto:${config.apis.crossref_mailto})`
     : 'bibcheck/0.0.0';
@@ -161,7 +157,6 @@ async function runCheckCommand(
     cwd,
     signal: controller.signal,
     logger,
-    worldcatApiKey,
     userAgent,
   });
 

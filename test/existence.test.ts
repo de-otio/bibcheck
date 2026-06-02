@@ -19,7 +19,6 @@ import type { DatabaseLookupResult } from '../src/databases/crossref.js';
 import type { CrossRefClient } from '../src/databases/crossref.js';
 import type { OpenAlexClient } from '../src/databases/openalex.js';
 import type { OpenLibraryClient } from '../src/databases/openlibrary.js';
-import type { WorldCatClient } from '../src/databases/worldcat.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -32,7 +31,6 @@ interface ClientHandlers {
   openalexDoi?: LookupFn;
   openalexSearch?: LookupFn;
   openlibrary?: LookupFn;
-  worldcat?: LookupFn;
 }
 
 function notImplemented(name: string): LookupFn {
@@ -58,13 +56,7 @@ function makeMockClients(h: ClientHandlers): RunExistenceDeps['clients'] {
       (h.openlibrary ?? notImplemented('openlibrary.lookupByIsbn'))(),
   };
 
-  const worldcat: WorldCatClient = {
-    name: 'worldcat' as const,
-    lookupByIsbn: (_isbn, _signal) =>
-      (h.worldcat ?? notImplemented('worldcat.lookupByIsbn'))(),
-  };
-
-  return { crossref, openalex, openlibrary, worldcat };
+  return { crossref, openalex, openlibrary };
 }
 
 function found(metadata: DatabaseLookupResult['metadata']): DatabaseLookupResult {
@@ -168,6 +160,23 @@ describe('titlesMatch', () => {
 
   it('empty strings match each other', () => {
     expect(titlesMatch('', '')).toBe(true);
+  });
+
+  // H3: token-set ratio fixes false metadata-mismatch on subtitle / reorder.
+  it('subtitle presence does not cause a mismatch ("Liberty" vs "Liberty: A Study")', () => {
+    expect(titlesMatch('Liberty', 'Liberty: A Study')).toBe(true);
+  });
+
+  it('subtitle on a multi-word title still matches ("On Liberty" vs "On Liberty: A New Edition")', () => {
+    expect(titlesMatch('On Liberty', 'On Liberty: A New Edition')).toBe(true);
+  });
+
+  it('word reordering matches ("Justice as Fairness" vs "Fairness as Justice")', () => {
+    expect(titlesMatch('Justice as Fairness', 'Fairness as Justice')).toBe(true);
+  });
+
+  it('genuinely different titles still do NOT match despite a shared word', () => {
+    expect(titlesMatch('A Theory of Justice', 'A Theory of Everything')).toBe(false);
   });
 });
 
@@ -307,7 +316,6 @@ describe('runExistence', () => {
             authors: ['Rawls, John'],
           }),
         ),
-      worldcat: () => Promise.resolve(notFound()),
     });
 
     const entry = makeEntry({
@@ -474,7 +482,6 @@ describe('runExistence', () => {
         ),
       openalexDoi: () => Promise.resolve(notFound()),
       openlibrary: () => Promise.resolve(notFound()),
-      worldcat: () => Promise.resolve(notFound()),
     });
 
     const entries = [
@@ -553,11 +560,10 @@ describe('runExistence', () => {
     expect(e.existence.checks.filter((c) => c.result === 'found')).toHaveLength(2);
   });
 
-  // ISBN entry where both OpenLibrary and WorldCat match
-  it('ISBN entry where WorldCat also matches → verified', async () => {
+  // ISBN entry where OpenLibrary matches (the sole ISBN source; WorldCat removed)
+  it('ISBN entry where OpenLibrary matches → verified', async () => {
     const clients = makeMockClients({
-      openlibrary: () => Promise.resolve(notFound()),
-      worldcat: () =>
+      openlibrary: () =>
         Promise.resolve(
           found({ title: 'The Republic', authors: ['Plato'], isbn: '978-0000000001' }),
         ),
@@ -573,6 +579,8 @@ describe('runExistence', () => {
     const result = await runExistence({ bibliography: [entry], clients, signal: makeSignal() });
     const e = result.entries[0]!;
     expect(e.existence.status).toBe('verified');
+    // Only OpenLibrary is consulted on the ISBN route.
+    expect(e.existence.checks.map((c) => c.source)).toEqual(['openlibrary']);
   });
 
   // Title-only entry, OpenAlex not found → 'not-found-in-databases'
@@ -615,5 +623,120 @@ describe('runExistence', () => {
     const result = await runExistence({ bibliography: [entry], clients, signal: makeSignal() });
     const e = result.entries[0]!;
     expect(e.existence.status).toBe('metadata-mismatch');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Evidence vocabulary (Q2): every layer carries evidence/checkedFor/notCheckedFor
+// ---------------------------------------------------------------------------
+
+describe('runExistence — evidence vocabulary (Q2)', () => {
+  async function statusFor(clients: RunExistenceDeps['clients'], entry: CslEntry) {
+    const result = await runExistence({ bibliography: [entry], clients, signal: makeSignal() });
+    return result.entries[0]!.existence;
+  }
+
+  it('verified → exists-metadata-match, checkedFor [existence, metadata]', async () => {
+    const ex = await statusFor(
+      makeMockClients({
+        crossrefDoi: () => Promise.resolve(found({ title: 'On Liberty', authors: ['Mill'] })),
+        openalexDoi: () => Promise.resolve(notFound()),
+      }),
+      makeEntry({ citekey: 'a', doi: '10.1/x', title: 'On Liberty', author: [{ family: 'Mill' }] }),
+    );
+    expect(ex.evidence).toBe('exists-metadata-match');
+    expect(ex.checkedFor).toEqual(['existence', 'metadata']);
+    expect(ex.notCheckedFor).toContain('claim-support');
+    expect(ex.error).toBeNull();
+  });
+
+  it('metadata-mismatch → exists-metadata-mismatch, checkedFor [existence, metadata]', async () => {
+    const ex = await statusFor(
+      makeMockClients({
+        crossrefDoi: () => Promise.resolve(found({ title: 'Totally Other Work', authors: ['Zzz'] })),
+        openalexDoi: () => Promise.resolve(notFound()),
+      }),
+      makeEntry({ citekey: 'a', doi: '10.1/x', title: 'On Liberty', author: [{ family: 'Mill' }] }),
+    );
+    expect(ex.evidence).toBe('exists-metadata-mismatch');
+    expect(ex.checkedFor).toEqual(['existence', 'metadata']);
+    expect(ex.notCheckedFor).toContain('claim-support');
+  });
+
+  it('not-found-in-databases → absent, checkedFor [existence]', async () => {
+    const ex = await statusFor(
+      makeMockClients({
+        crossrefDoi: () => Promise.resolve(notFound()),
+        openalexDoi: () => Promise.resolve(notFound()),
+      }),
+      makeEntry({ citekey: 'a', doi: '10.9/ghost' }),
+    );
+    expect(ex.evidence).toBe('absent');
+    expect(ex.checkedFor).toEqual(['existence']);
+    expect(ex.notCheckedFor).toContain('claim-support');
+    // A clean not-found is not an error.
+    expect(ex.error).toBeNull();
+  });
+
+  it('unverifiable (all sources error) → unverifiable, checkedFor [], top-level error set', async () => {
+    const httpErr = new HttpError('Service Unavailable', 503);
+    const ex = await statusFor(
+      makeMockClients({
+        crossrefDoi: () => Promise.reject(httpErr),
+        openalexDoi: () => Promise.reject(httpErr),
+      }),
+      makeEntry({ citekey: 'a', doi: '10.1/broken' }),
+    );
+    expect(ex.evidence).toBe('unverifiable');
+    expect(ex.checkedFor).toEqual([]);
+    expect(ex.notCheckedFor).toEqual(['existence', 'metadata', 'canonical-url', 'claim-support']);
+    expect(ex.error).toContain('Service Unavailable');
+  });
+
+  it('notCheckedFor always includes claim-support, in every status', async () => {
+    const cases = [
+      await statusFor(makeMockClients({}), makeEntry({ citekey: 'no-id' })), // unverifiable / no-doi
+    ];
+    for (const ex of cases) {
+      expect(ex.notCheckedFor).toContain('claim-support');
+    }
+  });
+
+  it('sanitizes a ?mailto= in an error message into the layer error/evidence', async () => {
+    const leaky = new HttpError(
+      'GET https://api.crossref.org/works/x?mailto=secret@example.com failed',
+      503,
+    );
+    const ex = await statusFor(
+      makeMockClients({
+        crossrefDoi: () => Promise.reject(leaky),
+        openalexDoi: () => Promise.reject(leaky),
+      }),
+      makeEntry({ citekey: 'a', doi: '10.1/x' }),
+    );
+    expect(JSON.stringify(ex)).not.toContain('mailto=');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Identifier short-circuit (T21/T22): malformed id skips the network call
+// ---------------------------------------------------------------------------
+
+describe('runExistence — identifierInvalid short-circuit', () => {
+  it('skips the network call and returns unverifiable with a note', async () => {
+    // crossref/openalex would throw if called (notImplemented), proving no call.
+    const clients = makeMockClients({});
+    const entry = makeEntry({ citekey: 'bad', doi: '10.1/whatever' });
+
+    const result = await runExistence({
+      bibliography: [entry],
+      clients,
+      identifierInvalid: new Set(['bad']),
+      signal: makeSignal(),
+    });
+    const e = result.entries[0]!;
+    expect(e.existence.status).toBe('unverifiable');
+    expect(e.existence.evidence).toBe('unverifiable');
+    expect(e.existence.error).toMatch(/identifier validation failed/i);
   });
 });

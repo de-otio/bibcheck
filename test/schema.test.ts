@@ -44,6 +44,8 @@ const BASE_SUMMARY = {
   totalEntries: 0,
   verified: 0,
   metadataMismatches: 0,
+  notFoundInDatabases: 0,
+  malformedIdentifiers: 0,
   unverifiable: 0,
   canonicalIssues: 0,
   linkageFailures: 0,
@@ -114,8 +116,8 @@ describe('ExistenceCheckSourceSchema', () => {
     ['crossref', true],
     ['openalex', true],
     ['openlibrary', true],
-    ['worldcat', true],
-    // Removed member
+    // Removed in 0.2.0 (T22): WorldCat / OCLC Classify decommissioned.
+    ['worldcat', false],
     ['doi-url', false],
     ['bogus', false],
   ])('value %s → valid: %s', (value, shouldAccept) => {
@@ -904,6 +906,8 @@ describe('OutputSchema — populated integration test', () => {
         totalEntries: 2,
         verified: 1,
         metadataMismatches: 0,
+        notFoundInDatabases: 0,
+        malformedIdentifiers: 0,
         unverifiable: 1,
         canonicalIssues: 0,
         linkageFailures: 1,
@@ -913,12 +917,16 @@ describe('OutputSchema — populated integration test', () => {
       entries: [
         {
           citekey: 'mill1859onliberty',
+          identifiers: { doi: 'not-applicable', isbn: 'ok', url: 'not-applicable' },
           existence: {
             status: 'verified',
+            evidence: 'exists-metadata-match',
+            checkedFor: ['existence', 'metadata'],
+            notCheckedFor: ['canonical-url', 'claim-support'],
             checks: [
               { source: 'openlibrary', result: 'found', evidence: { olid: 'OL7353613M' } },
-              { source: 'worldcat', result: 'found', evidence: null },
             ],
+            error: null,
           },
           canonical: {
             status: 'verified-canonical',
@@ -931,12 +939,17 @@ describe('OutputSchema — populated integration test', () => {
         },
         {
           citekey: 'habermas1962strukturwandel',
+          identifiers: { doi: 'not-applicable', isbn: 'not-applicable', url: 'not-applicable' },
           existence: {
             status: 'unverifiable',
+            evidence: 'unverifiable',
+            checkedFor: [],
+            notCheckedFor: ['existence', 'metadata', 'canonical-url', 'claim-support'],
             checks: [
               { source: 'crossref', result: 'no-doi', evidence: null },
               { source: 'openalex', result: 'not-found', evidence: null },
             ],
+            error: null,
           },
           canonical: {
             status: 'not-applicable',
@@ -1106,19 +1119,22 @@ describe('ExistenceLayerSchema — 0.2.0 fields', () => {
     ).not.toThrow();
   });
 
-  it('accepts a back-compat layer with only status + checks (pre-T22 producer)', () => {
+  it('rejects a layer with only status + checks (the 0.2.0 fields are now required)', () => {
     expect(() =>
       ExistenceLayerSchema.parse({
         status: 'unverifiable',
         checks: [{ source: 'crossref', result: 'no-doi', evidence: null }],
       })
-    ).not.toThrow();
+    ).toThrow();
   });
 
-  it('accepts an error string on a crashed layer', () => {
+  it('accepts an error string on a crashed layer (with the required fields)', () => {
     expect(() =>
       ExistenceLayerSchema.parse({
         status: 'unverifiable',
+        evidence: 'unverifiable',
+        checkedFor: [],
+        notCheckedFor: ['existence', 'metadata', 'canonical-url', 'claim-support'],
         checks: [],
         error: 'network unreachable',
       })
@@ -1130,25 +1146,26 @@ describe('ExistenceLayerSchema — 0.2.0 fields', () => {
       ExistenceLayerSchema.parse({
         status: 'verified',
         evidence: 'definitely-real',
+        checkedFor: ['existence'],
+        notCheckedFor: ['claim-support'],
         checks: [],
+        error: null,
       })
     ).toThrow();
   });
 });
 
 // ---------------------------------------------------------------------------
-// 16. Summary 0.2.0 counters: numeric boundaries (optional fields)
+// 16. Summary 0.2.0 counters: numeric boundaries (now REQUIRED fields)
 // ---------------------------------------------------------------------------
 
 describe('SummarySchema — 0.2.0 counters', () => {
   const newFields = ['notFoundInDatabases', 'malformedIdentifiers'] as const;
 
-  it.each(newFields)('field %s: accepts omission (optional)', (field) => {
-    // BASE_SUMMARY already omits both new counters; assert each is genuinely
-    // optional by parsing a summary that lacks it.
+  it.each(newFields)('field %s: rejects omission (now required)', (field) => {
     const summary: Record<string, number> = { ...BASE_SUMMARY };
     delete summary[field];
-    expect(() => SummarySchema.parse(summary)).not.toThrow();
+    expect(() => SummarySchema.parse(summary)).toThrow();
   });
 
   it.each(newFields)('field %s: rejects -1', (field) => {
@@ -1169,8 +1186,8 @@ describe('SummarySchema — 0.2.0 counters', () => {
 // ---------------------------------------------------------------------------
 
 describe('OutputSchema — 0.2.0 existence-bucket reconciliation', () => {
-  it('accepts a back-compat doc WITHOUT the new counters (invariant dormant)', () => {
-    // BASE_SUMMARY carries neither notFoundInDatabases nor malformedIdentifiers.
+  it('accepts an empty doc (all buckets 0, reconciles to totalEntries 0)', () => {
+    // BASE_SUMMARY now carries the required 0.2.0 counters at 0.
     expect(() => OutputSchema.parse(makeOutput())).not.toThrow();
   });
 

@@ -13,6 +13,8 @@ exports[`renderMarkdown > snapshot test: empty output structure is stable 1`] = 
 | Total entries | 0 |
 | Verified | 0 |
 | Metadata mismatches | 0 |
+| Not found in databases | 0 |
+| Malformed identifiers | 0 |
 | Unverifiable | 0 |
 | Canonical issues | 0 |
 | Linkage failures | 0 |
@@ -50,6 +52,8 @@ exports[`renderMarkdown > snapshot test: populated output structure is stable 1`
 | Total entries | 3 |
 | Verified | 1 |
 | Metadata mismatches | 1 |
+| Not found in databases | 0 |
+| Malformed identifiers | 0 |
 | Unverifiable | 1 |
 | Canonical issues | 2 |
 | Linkage failures | 1 |
@@ -58,11 +62,11 @@ exports[`renderMarkdown > snapshot test: populated output structure is stable 1`
 
 ## Bibliography entries
 
-| Citekey | Existence status | Canonical status | Canonical URL |
-|---------|-----------------|-----------------|---------------|
-| habermas1962strukturwandel | metadata-mismatch | dead-url | [link](https://example.org/habermas) |
-| kant1781kritik | unverifiable | wrong-host | [link](https://bad-host.example.com/kant) |
-| mill1859onliberty | verified | verified-canonical | [link](https://archive.org/details/onliberty00millgoog) |
+| Citekey | Existence status | Evidence | Canonical status | Canonical URL |
+|---------|-----------------|----------|-----------------|---------------|
+| habermas1962strukturwandel | metadata-mismatch | exists-metadata-mismatch | dead-url | [link](https://example.org/habermas) |
+| kant1781kritik | unverifiable | unverifiable | wrong-host | [link](https://bad-host.example.com/kant) |
+| mill1859onliberty | verified | exists-metadata-match | verified-canonical | [link](https://archive.org/details/onliberty00millgoog) |
 
 ## Linkage
 

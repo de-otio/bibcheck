@@ -50,11 +50,9 @@ const defaultConfig: Config = {
   apis: {
     crossref_mailto: null,
     openalex_mailto: null,
-    worldcat_key_env: null,
     crossref_base: 'https://api.crossref.org',
     openalex_base: 'https://api.openalex.org',
     openlibrary_base: 'https://openlibrary.org',
-    worldcat_base: 'http://classify.oclc.org',
   },
   cache: { dir: '.bibcheck-cache', max_size_mb: 256 },
 };
@@ -104,21 +102,44 @@ function makeEntry(citekey: string, overrides?: Partial<CslEntry>): CslEntry {
 function verifiedExistence(): ExistenceLayer {
   return {
     status: 'verified',
+    evidence: 'exists-metadata-match',
+    checkedFor: ['existence', 'metadata'],
+    notCheckedFor: ['canonical-url', 'claim-support'],
     checks: [{ source: 'crossref', result: 'found', evidence: null }],
+    error: null,
   };
 }
 
 function unverifiableExistence(): ExistenceLayer {
   return {
     status: 'unverifiable',
+    evidence: 'unverifiable',
+    checkedFor: [],
+    notCheckedFor: ['existence', 'metadata', 'canonical-url', 'claim-support'],
     checks: [{ source: 'crossref', result: 'error', evidence: { error: 'timeout' } }],
+    error: 'timeout',
   };
 }
 
 function mismatchExistence(): ExistenceLayer {
   return {
     status: 'metadata-mismatch',
+    evidence: 'exists-metadata-mismatch',
+    checkedFor: ['existence', 'metadata'],
+    notCheckedFor: ['canonical-url', 'claim-support'],
     checks: [{ source: 'crossref', result: 'metadata-mismatch', evidence: null }],
+    error: null,
+  };
+}
+
+function notFoundExistence(): ExistenceLayer {
+  return {
+    status: 'not-found-in-databases',
+    evidence: 'absent',
+    checkedFor: ['existence'],
+    notCheckedFor: ['metadata', 'canonical-url', 'claim-support'],
+    checks: [{ source: 'crossref', result: 'not-found', evidence: null }],
+    error: null,
   };
 }
 
@@ -206,7 +227,11 @@ describe('runCheck – one verified entry', () => {
     expect(() => OutputSchema.parse(output)).not.toThrow();
   });
 
-  it('does not count as verified if canonical has an issue', async () => {
+  it('existence buckets are independent of canonical: a verified-existence entry with a canonical issue stays in the verified existence bucket and also counts a canonical issue', async () => {
+    // T22/T20: the four existence buckets PARTITION the entries by existence
+    // status, so they reconcile to totalEntries. A canonical issue is a
+    // separate (overlapping) counter and a separate exit reason — it does not
+    // move the entry out of its existence bucket.
     const entry = makeEntry('jones1990');
     const deps = makeBaseDeps({
       bibliography: [entry],
@@ -219,8 +244,10 @@ describe('runCheck – one verified entry', () => {
     });
 
     const output = await runCheck(deps);
-    expect(output.summary.verified).toBe(0);
+    expect(output.summary.verified).toBe(1);
     expect(output.summary.canonicalIssues).toBe(1);
+    // Still gates — via the canonical issue.
+    expect(checkExitReasons(output)).toContain(CHECK_NON_ZERO_REASON.canonical_issue);
     expect(() => OutputSchema.parse(output)).not.toThrow();
   });
 });
@@ -1013,7 +1040,6 @@ describe('runCheck – configurable [apis] base URLs', () => {
         crossref_base: base,
         openalex_base: base,
         openlibrary_base: base,
-        worldcat_base: base,
       },
     };
   }
@@ -1065,7 +1091,7 @@ describe('runCheck – configurable [apis] base URLs', () => {
     expect(() => OutputSchema.parse(output)).not.toThrow();
   });
 
-  it('treats a 404 from both DOI sources as not-found-in-databases (does not gate)', async () => {
+  it('treats a 404 from both DOI sources as not-found-in-databases AND gates by default (B1 fix, Q1)', async () => {
     const base = 'https://stub.example.test';
     const entry = makeEntry('fake2099', { doi: '10.9999/nonexistent' });
     const { http } = cannedHttp(() => ({ status: 404, body: { status: 'error' } }));
@@ -1080,21 +1106,22 @@ describe('runCheck – configurable [apis] base URLs', () => {
 
     const output = await runCheck(deps);
     expect(output.entries[0]?.existence?.status).toBe('not-found-in-databases');
-    // not-found does NOT gate (T22 owns gating semantics).
-    expect(checkExitReasons(output)).toEqual([]);
+    expect(output.entries[0]?.existence?.evidence).toBe('absent');
+    expect(output.summary.notFoundInDatabases).toBe(1);
+    // Absence is a fabrication signal and gates by default (T22 secure default).
+    expect(checkExitReasons(output)).toContain(CHECK_NON_ZERO_REASON.not_found_in_databases);
     expect(() => OutputSchema.parse(output)).not.toThrow();
   });
 
-  it('builds ISBN lookup URLs (OpenLibrary + WorldCat) from the configured base', async () => {
+  it('builds ISBN lookup URLs (OpenLibrary, the sole ISBN source) from the configured base', async () => {
     const base = 'https://stub.example.test';
-    const entry = makeEntry('book2000', { isbn: '978-0-14-043207-9' });
+    const entry = makeEntry('book2000', { isbn: '978-0-14-043207-7' });
     const { http, urls } = cannedHttp((url) => {
       if (url.includes('/api/books')) {
         // OpenLibrary found body, no title/author → match.
-        return { status: 200, body: { 'ISBN:978-0-14-043207-9': { publish_date: '2000' } } };
+        return { status: 200, body: { 'ISBN:978-0-14-043207-7': { publish_date: '2000' } } };
       }
-      // WorldCat Classify found body.
-      return { status: 200, body: { classify: { work: {} } } };
+      return { status: 404, body: {} };
     });
 
     const deps = makeBaseDeps({
@@ -1108,34 +1135,94 @@ describe('runCheck – configurable [apis] base URLs', () => {
     const output = await runCheck(deps);
     expect(urls.every((u) => u.startsWith(base))).toBe(true);
     expect(urls.some((u) => u.includes('/api/books'))).toBe(true);
-    expect(urls.some((u) => u.includes('/classify2/api'))).toBe(true);
+    // WorldCat / OCLC Classify is gone — no /classify2/api request is ever made.
+    expect(urls.some((u) => u.includes('/classify2/api'))).toBe(false);
     expect(output.entries[0]?.existence?.status).toBe('verified');
     expect(() => OutputSchema.parse(output)).not.toThrow();
   });
 });
 
 // ---------------------------------------------------------------------------
-// worldcat_key_env branch coverage
+// Identifiers wiring + malformed-identifier gating (T21/T22)
+//
+// Drives the *real* runExistence + runIdentifiers through runCheck to prove
+// that (a) a malformed/bad-checksum identifier short-circuits the network call
+// and (b) it gates by default and is counted in summary.malformedIdentifiers.
 // ---------------------------------------------------------------------------
 
-describe('runCheck – worldcat_key_env', () => {
-  it('worldcat_key_env set: existence subcommand is still called', async () => {
-    const config: Config = {
-      ...defaultConfig,
-      apis: {
-        ...defaultConfig.apis,
-        worldcat_key_env: 'TEST_WORLDCAT_KEY',
-      },
+describe('runCheck – malformed identifiers (T21/T22)', () => {
+  function cannedHttp(): { http: HttpClient; getCalls: () => number } {
+    let calls = 0;
+    const http: HttpClient = {
+      get: vi.fn(async (url: string) => {
+        calls += 1;
+        return { status: 200, headers: { 'content-type': 'application/json' }, body: { status: 'ok', message: {} } };
+      }),
+      head: vi.fn(async (url: string) => ({ status: 200, finalUrl: url, redirectChain: [] })),
     };
+    return { http, getCalls: () => calls };
+  }
 
-    const doRunExistence = vi.fn().mockResolvedValue({ entries: [] } satisfies RunExistenceResult);
+  it('a bad-checksum ISBN skips the network call, is unverifiable, counts in malformedIdentifiers, and gates', async () => {
+    // 978-0-14-043207-0 transposes the final check digit of a real ISBN → bad checksum.
+    const entry = makeEntry('badisbn2000', { isbn: '978-0-14-043207-0' });
+    const { http, getCalls } = cannedHttp();
+
     const deps = makeBaseDeps({
-      config,
-      _runExistence: doRunExistence,
+      bibliography: [entry],
+      http,
+      _runExistence: undefined, // real runner
+      skip: new Set(['canonical', 'linkage', 'phrases', 'worklist']),
     });
 
     const output = await runCheck(deps);
-    expect(doRunExistence).toHaveBeenCalled();
+
+    // Identifier layer recorded the bad checksum.
+    expect(output.entries[0]?.identifiers?.isbn).toBe('bad-checksum');
+    // Network existence call was skipped entirely.
+    expect(getCalls()).toBe(0);
+    expect(output.entries[0]?.existence?.status).toBe('unverifiable');
+    expect(output.entries[0]?.existence?.evidence).toBe('unverifiable');
+    // Counted and gating.
+    expect(output.summary.malformedIdentifiers).toBe(1);
+    expect(checkExitReasons(output)).toContain(CHECK_NON_ZERO_REASON.malformed_identifier);
+    expect(() => OutputSchema.parse(output)).not.toThrow();
+  });
+
+  it('a malformed DOI skips the network call and gates', async () => {
+    const entry = makeEntry('baddoi2000', { doi: 'not-a-doi' });
+    const { http, getCalls } = cannedHttp();
+
+    const deps = makeBaseDeps({
+      bibliography: [entry],
+      http,
+      _runExistence: undefined,
+      skip: new Set(['canonical', 'linkage', 'phrases', 'worklist']),
+    });
+
+    const output = await runCheck(deps);
+    expect(output.entries[0]?.identifiers?.doi).toBe('malformed');
+    expect(getCalls()).toBe(0);
+    expect(output.summary.malformedIdentifiers).toBe(1);
+    expect(checkExitReasons(output)).toContain(CHECK_NON_ZERO_REASON.malformed_identifier);
+    expect(() => OutputSchema.parse(output)).not.toThrow();
+  });
+
+  it('a well-formed identifier does NOT count as malformed and runs the network call', async () => {
+    const entry = makeEntry('good2000', { doi: '10.1234/ok' });
+    const { http, getCalls } = cannedHttp();
+
+    const deps = makeBaseDeps({
+      bibliography: [entry],
+      http,
+      _runExistence: undefined,
+      skip: new Set(['canonical', 'linkage', 'phrases', 'worklist']),
+    });
+
+    const output = await runCheck(deps);
+    expect(output.entries[0]?.identifiers?.doi).toBe('ok');
+    expect(getCalls()).toBeGreaterThan(0);
+    expect(output.summary.malformedIdentifiers).toBe(0);
     expect(() => OutputSchema.parse(output)).not.toThrow();
   });
 });
@@ -1150,5 +1237,7 @@ describe('CHECK_NON_ZERO_REASON', () => {
     expect(CHECK_NON_ZERO_REASON.unresolved_linkage).toBe('unresolved_linkage');
     expect(CHECK_NON_ZERO_REASON.canonical_issue).toBe('canonical_issue');
     expect(CHECK_NON_ZERO_REASON.metadata_mismatch).toBe('metadata_mismatch');
+    expect(CHECK_NON_ZERO_REASON.not_found_in_databases).toBe('not_found_in_databases');
+    expect(CHECK_NON_ZERO_REASON.malformed_identifier).toBe('malformed_identifier');
   });
 });

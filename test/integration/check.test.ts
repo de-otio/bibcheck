@@ -38,6 +38,7 @@ const fixturesDir = path.join(projectRoot, 'test', 'fixtures');
 const KNOWN_GOOD = path.join(fixturesDir, 'known-good');
 const KNOWN_BAD  = path.join(fixturesDir, 'known-bad');
 const MINIMAL    = path.join(fixturesDir, 'minimal');
+const GATING     = path.join(fixturesDir, 'gating');
 
 const SARIF_SCHEMA_PATH = path.join(fixturesDir, 'sarif-2.1.0.schema.json');
 
@@ -205,6 +206,52 @@ describe('known-bad fixture', () => {
     const output = JSON.parse(result.stdout) as Record<string, unknown>;
     const phraseFlags = output['phraseFlags'] as Array<Record<string, unknown>>;
     expect(phraseFlags.some((f) => f['status'] === 'flagged')).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// gating fixture — the T22 B1 fix + malformed-identifier gating (Q1)
+//
+// Proves the headline behaviour end-to-end via the built CLI + hermetic stub:
+//   - a fabricated DOI (stub 404) → not-found-in-databases, counted, exit 1
+//   - a bad-checksum ISBN (local T21) → skips the network call, counted in
+//     malformedIdentifiers, exit 1
+// ---------------------------------------------------------------------------
+
+describe('gating fixture (fabricated DOI + bad-checksum ISBN)', () => {
+  it('exits 1', async () => {
+    const cwd = await stubbedFixture(GATING);
+    const result = await runCli(['check', '--format', 'json'], cwd);
+    expect(result.code).toBe(1);
+  });
+
+  it('counts the fabricated DOI in summary.notFoundInDatabases and the bad ISBN in summary.malformedIdentifiers', async () => {
+    const cwd = await stubbedFixture(GATING);
+    const result = await runCli(['check', '--format', 'json'], cwd);
+    const output = JSON.parse(result.stdout) as Record<string, unknown>;
+    const summary = output['summary'] as Record<string, number>;
+
+    expect(summary['notFoundInDatabases']).toBe(1);
+    expect(summary['malformedIdentifiers']).toBe(1);
+
+    const entries = output['entries'] as Array<Record<string, unknown>>;
+    const fakeDoi = entries.find((e) => e['citekey'] === 'fakeDoi2099nonexistent');
+    const existence = fakeDoi?.['existence'] as Record<string, unknown> | undefined;
+    expect(existence?.['status']).toBe('not-found-in-databases');
+    expect(existence?.['evidence']).toBe('absent');
+
+    const badIsbn = entries.find((e) => e['citekey'] === 'badChecksumIsbn');
+    const ids = badIsbn?.['identifiers'] as Record<string, unknown> | undefined;
+    expect(ids?.['isbn']).toBe('bad-checksum');
+    // claim-support is always in notCheckedFor (Q2).
+    const badExistence = badIsbn?.['existence'] as Record<string, unknown> | undefined;
+    expect(badExistence?.['notCheckedFor']).toContain('claim-support');
+  });
+
+  it('does not leak a mailto/API key into the output for the fabricated DOI', async () => {
+    const cwd = await stubbedFixture(GATING);
+    const result = await runCli(['check', '--format', 'json'], cwd);
+    expect(result.stdout).not.toContain('mailto=');
   });
 });
 

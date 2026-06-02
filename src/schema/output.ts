@@ -66,15 +66,13 @@ export const SummarySchema = z.object({
    * Entries confirmed absent from every applicable database (a fabrication
    * signal; gates by default per Q1). NEW in 0.2.0.
    */
-  // TODO(T22): tighten to required once check.ts populates this
-  notFoundInDatabases: z.number().int().nonnegative().optional(),
+  notFoundInDatabases: z.number().int().nonnegative(),
   /**
    * Entries with at least one malformed/bad-checksum identifier in the
    * `identifiers` layer (a cheap fabrication signal; gates by default). NEW
    * in 0.2.0.
    */
-  // TODO(T22): tighten to required once check.ts populates this (via T21)
-  malformedIdentifiers: z.number().int().nonnegative().optional(),
+  malformedIdentifiers: z.number().int().nonnegative(),
   unverifiable: z.number().int().nonnegative(),
   canonicalIssues: z.number().int().nonnegative(),
   linkageFailures: z.number().int().nonnegative(),
@@ -86,18 +84,17 @@ export type Summary = z.infer<typeof SummarySchema>;
 // ---------------------------------------------------------------------------
 // Layer 1: existence (commodity convenience layer)
 //
-// DOI / ISBN / title-search lookup against CrossRef, OpenAlex, OpenLibrary,
-// WorldCat. A thin direct-fetch wrapper, not a heavyweight resolver.
+// DOI / ISBN / title-search lookup against CrossRef, OpenAlex, OpenLibrary.
+// A thin direct-fetch wrapper, not a heavyweight resolver. (WorldCat / OCLC
+// Classify was removed in 0.2.0 — the Classify endpoint was decommissioned in
+// 2019; see tmp/design-review/worldcat.md. ISBN existence is covered by
+// OpenLibrary.)
 // ---------------------------------------------------------------------------
 
 export const ExistenceCheckSourceSchema = z.enum([
   'crossref',
   'openalex',
   'openlibrary',
-  // TODO(T22): remove 'worldcat' when the dead OCLC Classify client is deleted
-  // (OCLC Classify retired 2019; see tmp/design-review/worldcat.md). Kept now
-  // so src/databases/worldcat.ts and its callers still typecheck.
-  'worldcat',
 ]);
 export type ExistenceCheckSource = z.infer<typeof ExistenceCheckSourceSchema>;
 
@@ -160,26 +157,22 @@ export type CheckDimension = z.infer<typeof CheckDimensionSchema>;
 export const ExistenceLayerSchema = z.object({
   status: ExistenceStatusSchema,
   /** Defined evidence vocabulary (Q2). NEW in 0.2.0. */
-  // TODO(T22): tighten to required once check.ts populates this
-  evidence: ExistenceEvidenceSchema.optional(),
+  evidence: ExistenceEvidenceSchema,
   /** Dimensions that were checked, e.g. ['existence','metadata']. NEW in 0.2.0. */
-  // TODO(T22): tighten to required once check.ts populates this
-  checkedFor: z.array(CheckDimensionSchema).optional(),
+  checkedFor: z.array(CheckDimensionSchema),
   /**
    * Dimensions that were NOT checked. Always includes 'claim-support' for
    * v0.1 (bibcheck never verifies whether the source supports the prose's
    * claim; that is the manual worklist's job). NEW in 0.2.0.
    */
-  // TODO(T22): tighten to required once check.ts populates this
-  notCheckedFor: z.array(CheckDimensionSchema).optional(),
+  notCheckedFor: z.array(CheckDimensionSchema),
   checks: z.array(ExistenceCheckSchema),
   /**
    * Set when the layer crashed (vs. a clean unverifiable result), so consumers
    * can distinguish "we ran and found nothing applicable" from "we failed to
-   * run." NEW in 0.2.0 (also addresses S1).
+   * run." NEW in 0.2.0 (also addresses S1). Null when the layer ran cleanly.
    */
-  // TODO(T22): tighten to required once check.ts populates this
-  error: z.string().nullable().optional(),
+  error: z.string().nullable(),
 });
 export type ExistenceLayer = z.infer<typeof ExistenceLayerSchema>;
 
@@ -250,8 +243,7 @@ export const EntrySchema = z.object({
    * Layer 0 local identifier well-formedness (pre-network). Null when not run.
    * NEW in 0.2.0 (Q5 / T21).
    */
-  // TODO(T22): tighten to required (.nullable() only) once check.ts populates this
-  identifiers: IdentifiersLayerSchema.nullable().optional(),
+  identifiers: IdentifiersLayerSchema.nullable(),
   /** Layer 1 existence findings (commodity layer). Null when not run. */
   existence: ExistenceLayerSchema.nullable(),
   /** Layer 1 canonical-edition findings (differentiated layer). Null when not run. */
@@ -402,33 +394,24 @@ export const OutputSchema = z
         message: `canonicalIssues (${o.summary.canonicalIssues}) cannot exceed totalEntries (${o.summary.totalEntries})`,
       });
     }
-    // New 0.2.0 counters. Each invariant is guarded so it only fires once the
-    // relevant optional counter is present — pre-T22 producers omit them and
-    // must keep validating.
-    if (
-      o.summary.notFoundInDatabases !== undefined &&
-      o.summary.notFoundInDatabases > o.summary.totalEntries
-    ) {
+    // 0.2.0 counters (required since T22).
+    if (o.summary.notFoundInDatabases > o.summary.totalEntries) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['summary', 'notFoundInDatabases'],
         message: `notFoundInDatabases (${o.summary.notFoundInDatabases}) cannot exceed totalEntries (${o.summary.totalEntries})`,
       });
     }
-    if (
-      o.summary.malformedIdentifiers !== undefined &&
-      o.summary.malformedIdentifiers > o.summary.totalEntries
-    ) {
+    if (o.summary.malformedIdentifiers > o.summary.totalEntries) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['summary', 'malformedIdentifiers'],
         message: `malformedIdentifiers (${o.summary.malformedIdentifiers}) cannot exceed totalEntries (${o.summary.totalEntries})`,
       });
     }
-    // Existence-bucket reconciliation: every entry lands in exactly one
-    // existence bucket. Only enforceable once `notFoundInDatabases` is present
-    // (the bucket count it represents was unmodelled before 0.2.0).
-    if (o.summary.notFoundInDatabases !== undefined) {
+    // Existence-bucket reconciliation: every entry lands in exactly one of the
+    // four existence buckets, which must sum to totalEntries.
+    {
       const bucketSum =
         o.summary.verified +
         o.summary.metadataMismatches +

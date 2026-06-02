@@ -50,7 +50,7 @@ const EXPECTED_DEFAULTS: Config = {
   phrases: { file: null },
   source_types: {},
   edition_discipline: {},
-  apis: { crossref_mailto: null, openalex_mailto: null, worldcat_key_env: null },
+  apis: { crossref_mailto: null, openalex_mailto: null },
   cache: { dir: '.bibcheck-cache', max_size_mb: 256 },
 };
 
@@ -108,7 +108,6 @@ file = "config/phrases.toml"
 [apis]
 crossref_mailto = "user@example.com"
 openalex_mailto = "user2@example.org"
-worldcat_key_env = "WORLDCAT_KEY"
 
 [cache]
 dir = ".my-cache"
@@ -135,7 +134,6 @@ smith = "glasgow"
     expect(config.phrases.file).toBe('config/phrases.toml');
     expect(config.apis.crossref_mailto).toBe('user@example.com');
     expect(config.apis.openalex_mailto).toBe('user2@example.org');
-    expect(config.apis.worldcat_key_env).toBe('WORLDCAT_KEY');
     expect(config.cache.dir).toBe('.my-cache');
     expect(config.cache.max_size_mb).toBe(512);
     expect(config.source_types['book']).toEqual({ warn_load_bearing: true, allow_load_bearing: false });
@@ -259,7 +257,6 @@ crossref_mailto = "a@b.com"
     const config = await loadConfig({ cwd: tempDir });
     expect(config.apis.crossref_mailto).toBe('a@b.com');
     expect(config.apis.openalex_mailto).toBeNull();
-    expect(config.apis.worldcat_key_env).toBeNull();
   });
 
   it('source_types entry with unknown keys fails validation', async () => {

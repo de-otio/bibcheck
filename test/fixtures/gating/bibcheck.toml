@@ -1,0 +1,5 @@
+[bibliography]
+file = "sources.json"
+
+[docs]
+include = ["docs/**/*.md"]

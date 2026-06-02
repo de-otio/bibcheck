@@ -42,7 +42,7 @@ function makeConfig(
     phrases: { file: null },
     source_types: {},
     edition_discipline: {},
-    apis: { crossref_mailto: null, openalex_mailto: null, worldcat_key_env: null },
+    apis: { crossref_mailto: null, openalex_mailto: null },
     cache: { dir: '.bibcheck-cache', max_size_mb: 256 },
   };
 }
