@@ -3,6 +3,11 @@ on:
   push:
     tags: ['v*']
 
+# Serialize publishes; never cancel an in-flight release.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
 # Minimum-permission principle.
 # id-token: write enables OIDC (npm Trusted Publishing).
 # contents: read lets us check out the tagged commit.

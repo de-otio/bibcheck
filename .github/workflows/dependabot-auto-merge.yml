@@ -16,6 +16,11 @@ on:
   pull_request:
     branches: [main]
 
+# Cancel superseded runs when Dependabot rebases/force-pushes a PR.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: write
   pull-requests: write
@@ -23,6 +28,7 @@ permissions:
 jobs:
   dependabot:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     # Only act on PRs opened by Dependabot.
     if: github.actor == 'dependabot[bot]'
     steps:
