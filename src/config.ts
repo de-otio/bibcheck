@@ -92,14 +92,21 @@ const CacheSchema = z.object({
 // ---------------------------------------------------------------------------
 
 export const ConfigSchema = z.object({
-  bibliography: BibliographySchema.default({}),
-  docs: DocsSchema.default({}),
-  trusted_hosts: TrustedHostsSchema.default({}),
-  phrases: PhrasesSchema.default({}),
+  // `.prefault({})` (not `.default({})`) — under zod v4, `.default()` no
+  // longer accepts a partial object relying on the nested schema's own
+  // field-level defaults (that typed as `{}` under v3, but v4 tightened the
+  // overload to require every field). `.prefault()` applies the given value
+  // *before* parsing, so the empty object is run back through the nested
+  // schema and its own `.default()`s fill in each field, preserving the
+  // original "no section present -> full nested defaults" behavior.
+  bibliography: BibliographySchema.prefault({}),
+  docs: DocsSchema.prefault({}),
+  trusted_hosts: TrustedHostsSchema.prefault({}),
+  phrases: PhrasesSchema.prefault({}),
   source_types: z.record(z.string(), SourceTypeEntrySchema).default({}),
   edition_discipline: z.record(z.string(), z.string()).default({}),
-  apis: ApisSchema.default({}),
-  cache: CacheSchema.default({}),
+  apis: ApisSchema.prefault({}),
+  cache: CacheSchema.prefault({}),
 });
 
 export type Config = z.infer<typeof ConfigSchema>;
